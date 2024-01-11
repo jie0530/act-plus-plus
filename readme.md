@@ -35,15 +35,18 @@ conda activate aloha
 # 3. 安装适合cuda的torch
 pip install torch==1.11.0+cu113 torchvision==0.12.0+cu113 torchaudio==0.11.0 --extra-index-url https://download.pytorch.org/whl/cu113
 
-# 4. 其他依赖
+
+# 4 安装detr
+##  拉取act源码
+git clone https://github.com/agilexrobotics/act-plus-plus.git
+cd act-plus-plus
+
+
+# 4.1 其他依赖
 pip install -r requirements.txt
 
-# 5 安装detr
-## 5.1 拉取源码
-git clone https://github.com/MarkFzp/act-plus-plus.git
-
-## 5.2 安装detr
-cd act-plus-plus/detr && pip install -v -e .
+## 4.2 安装detr
+cd detr && pip install -v -e .
 ~~~
 
 ## 2.2 simulated environments datasets
