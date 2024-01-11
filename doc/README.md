@@ -1,6 +1,10 @@
 # Imitation Learning algorithms and Co-training for Mobile ALOHA
 
 
+# Detailed environment configuration reference [here](https://github.com/agilexrobotics/act-plus-plus/blob/main/doc/env.md)
+
+---
+
 #### Project Website: https://mobile-aloha.github.io/
 
 This repo contains the implementation of ACT, Diffusion Policy and VINN, together with 2 simulated environments:

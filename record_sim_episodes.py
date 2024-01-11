@@ -53,11 +53,14 @@ def main(args):
         ts = env.reset()
         episode = [ts]
         policy = policy_cls(inject_noise)
-        # setup plotting
+        # setup plotting 可视化
+        
         if onscreen_render:
+            plt.figure(figsize=(9, 8))
             ax = plt.subplot()
             plt_img = ax.imshow(ts.observation['images'][render_cam_name])
             plt.ion()
+
         for step in range(episode_len):
             action = policy(ts)
             ts = env.step(action)

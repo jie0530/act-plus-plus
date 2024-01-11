@@ -330,6 +330,7 @@ def eval_bc(config, ckpt_name, save_episode=True, num_rollouts=50):
 
         ### onscreen render
         if onscreen_render:
+            plt.figure(figsize=(9, 8))
             ax = plt.subplot()
             plt_img = ax.imshow(env._physics.render(height=480, width=640, camera_id=onscreen_cam))
             plt.ion()

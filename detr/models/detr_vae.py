@@ -282,8 +282,9 @@ def build(args):
     if args.no_encoder:
         encoder = None
     else:
-        encoder = build_transformer(args)
-
+        # encoder = build_transformer(args)
+        encoder = build_encoder(args)
+        
     model = DETRVAE(
         backbones,
         transformer,
