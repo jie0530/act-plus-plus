@@ -3,7 +3,7 @@
 
 A Low-cost Open-source Hardware System for Bimanual Teleoperation
 
-首先感谢`Fu, Zipeng and Zhao, Tony Z. and Finn, Chelsea`作者们伟大的开源工作[Mobile ALOHA](https://github.com/MarkFzp/mobile-aloha?tab=readme-ov-file)。松灵作为人工智能机器人公司，秉承开源精神，后续更新Mobile ALOHA相关进展。
+首先感谢`Fu, Zipeng and Zhao, Tony Z. and Finn, Chelsea`作者们伟大的开源工作[Mobile ALOHA](https://github.com/MarkFzp/mobile-aloha?tab=readme-ov-file)。松灵机器人作为AI机器人公司引领者之一，秉承开源精神，后续更新Mobile ALOHA相关进展。
 
 
 # ACT
