@@ -1,14 +1,18 @@
 
-# Mobile ALOHA涉及到了这三大关键技术：ACT、Diffusion Policy、VINN
+# Mobile ALOHA
 
 A Low-cost Open-source Hardware System for Bimanual Teleoperation
 
-感谢 ，松灵作为。秉承开源精神，后续
+首先感谢`Fu, Zipeng and Zhao, Tony Z. and Finn, Chelsea`作者们伟大的开源工作[Mobile ALOHA](https://github.com/MarkFzp/mobile-aloha?tab=readme-ov-file)。
+
+松灵机器人作为AI机器人公司引领者之一，是一家领先的移动机器人底盘制造商和无人系统解决方案提供商，其自主研发多模态轮式和履带式线控底盘技术和机器人系统解决方案，为各领域提供了定制化的机器人应用方案。秉承开源精神，后续更新Mobile ALOHA相关进展。
 
 
 # ACT
 
 # 1 简介
+涉及到了这三大关键技术：ACT、Diffusion Policy、VINN
+
 1. 端到端的模仿学习
 2. 基于Transformer在动作序列上生成模型，动作分块算法。
 
@@ -215,5 +219,6 @@ episode-qpos
   <img src="./doc/2.png" width="800" height="600" />
 </p>
 
+---
 
-硬件平台
++ 如需硬件平台可联系松灵客服-17796377363.
