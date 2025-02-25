@@ -206,6 +206,11 @@ class ACTPolicy(nn.Module):
         self.vq = args_override['vq']
         print(f'KL Weight {self.kl_weight}')
 
+    # __call__ 方法被重写，用于处理输入数据，并自动调用 forward 方法和其他钩子函数。因此，当你调用 class_object(input) 时，实际上触发了以下流程：
+    # 执行 __call__ 方法。
+    # 在 __call__ 方法内部，处理预定义钩子。
+    # 调用用户定义的 forward 方法。
+    # 返回 forward 方法的输出。
     def __call__(self, qpos, image, actions=None, is_pad=None, vq_sample=None):
         env_state = None
         normalize = transforms.Normalize(mean=[0.485, 0.456, 0.406],

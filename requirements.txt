@@ -1,0 +1,12 @@
+pyquaternion
+pyyaml
+rospkg
+pexpect
+mujoco
+dm_control
+opencv-python
+matplotlib
+einops
+packaging
+h5py
+ipython

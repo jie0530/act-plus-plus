@@ -51,7 +51,7 @@ class DETRVAE(nn.Module):
         self.encoder = encoder
         self.vq, self.vq_class, self.vq_dim = vq, vq_class, vq_dim
         self.state_dim, self.action_dim = state_dim, action_dim
-        hidden_dim = transformer.d_model
+        hidden_dim = transformer.d_model #隐藏层维度
         self.action_head = nn.Linear(hidden_dim, action_dim)
         self.is_pad_head = nn.Linear(hidden_dim, 1)
         self.query_embed = nn.Embedding(num_queries, hidden_dim)
@@ -67,6 +67,7 @@ class DETRVAE(nn.Module):
             self.backbones = None
 
         # encoder extra parameters
+        # 潜在向量z的维度
         self.latent_dim = 32 # final size of latent z # TODO tune
         self.cls_embed = nn.Embedding(1, hidden_dim) # extra cls token embedding
         self.encoder_action_proj = nn.Linear(action_dim, hidden_dim) # project action to embedding
@@ -77,12 +78,14 @@ class DETRVAE(nn.Module):
             self.latent_proj = nn.Linear(hidden_dim, self.vq_class * self.vq_dim)
         else:
             self.latent_proj = nn.Linear(hidden_dim, self.latent_dim*2) # project hidden state to latent std, var
+        # 注册一个缓冲区pos_table，用于存储正弦位置编码表  缓存区是一种特殊的张量，它存储存的是一个固定的值，不会随着训练过程而改变。
+        # get_sinusoid_encoding_table函数（未在代码中定义）可能用于生成正弦位置编码，这是Transformer架构中常用的一种技术，为序列中的每个位置提供唯一的表示
         self.register_buffer('pos_table', get_sinusoid_encoding_table(1+1+num_queries, hidden_dim)) # [CLS], qpos, a_seq
 
         # decoder extra parameters
         if self.vq:
             self.latent_out_proj = nn.Linear(self.vq_class * self.vq_dim, hidden_dim)
-        else:
+        else: 
             self.latent_out_proj = nn.Linear(self.latent_dim, hidden_dim) # project latent sample to embedding
         self.additional_pos_embed = nn.Embedding(2, hidden_dim) # learned position embedding for proprio and latent
 
@@ -267,7 +270,7 @@ def build_encoder(args):
 
 
 def build(args):
-    state_dim = 14 # TODO hardcode
+    state_dim = 6 # TODO hardcode
 
     # From state
     # backbone = None # from state for now, no need for conv nets
@@ -282,8 +285,9 @@ def build(args):
     if args.no_encoder:
         encoder = None
     else:
-        encoder = build_transformer(args)
-
+        # encoder = build_transformer(args)
+        encoder = build_encoder(args)
+        
     model = DETRVAE(
         backbones,
         transformer,
@@ -303,7 +307,7 @@ def build(args):
     return model
 
 def build_cnnmlp(args):
-    state_dim = 14 # TODO hardcode
+    state_dim = 6 # TODO hardcode
 
     # From state
     # backbone = None # from state for now, no need for conv nets
