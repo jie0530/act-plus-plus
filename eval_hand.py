@@ -14,9 +14,9 @@ from torchvision import transforms
 
 from constants import FPS
 # from constants import PUPPET_GRIPPER_JOINT_OPEN
-from utils import load_data # data functions
-from utils import sample_box_pose, sample_insertion_pose # robot functions
-from utils import compute_dict_mean, set_seed, detach_dict, calibrate_linear_vel, postprocess_base_action # helper functions
+from utils_arm import load_data # data functions
+from utils_arm import sample_box_pose, sample_insertion_pose # robot functions
+from utils_arm import compute_dict_mean, set_seed, detach_dict, calibrate_linear_vel, postprocess_base_action # helper functions
 from policy import ACTPolicy, CNNMLPPolicy, DiffusionPolicy
 from visualize_episodes import save_videos
 
@@ -406,7 +406,8 @@ def eval_bc(config, ckpt_name, save_episode=True, num_rollouts=50):
             # else:
 
             ### step the environment
-            sub_data.control_arm(action)
+            # sub_data.control_arm(action)
+            sub_data.control_gripper(action)
             rospy.sleep(0.1)
 
 def forward_pass(data, policy):

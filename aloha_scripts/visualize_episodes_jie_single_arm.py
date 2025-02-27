@@ -5,7 +5,7 @@ import h5py
 import argparse
 
 import matplotlib.pyplot as plt
-from constants import DT
+from jie_aloha_scripts.constants import DT
 
 import IPython
 e = IPython.embed
@@ -15,10 +15,10 @@ e = IPython.embed
 # BASE_STATE_NAMES = ["linear_vel", "angular_vel"]
 # JOINT_NAMES = ["r_L1", "r_L2", "r_L3", "r_L4", "r_L5", "r_L6","l_L1", "l_L2", "l_L3", "l_L4", "l_L5", "l_L6"]
 JOINT_NAMES = ["j1", "j2", "j3", "j4", "j5", "j6"]
-# GRIPPER_NAME = ["thumb_cmc", "thumb_mcp", "index", "middle", "ring", "little",]
+GRIPPER_NAME = ["thumb_cmc", "thumb_mcp", "index", "middle", "ring", "little",]
 # STATE_NAMES = JOINT_NAMES + ["right_gripper_1"] + ["left_gripper"] 
-STATE_NAMES = JOINT_NAMES
-# STATE_NAMES = JOINT_NAMES + GRIPPER_NAME
+# STATE_NAMES = JOINT_NAMES
+STATE_NAMES = JOINT_NAMES + GRIPPER_NAME
 
 def load_hdf5(dataset_dir, dataset_name):
     dataset_path = os.path.join(dataset_dir, dataset_name + '.hdf5')
@@ -61,6 +61,14 @@ def load_hdf5(dataset_dir, dataset_name):
 
 def main(args):
     dataset_dir = args['dataset_dir']
+    task_name = args['task_name']
+    vis_data_dir = '/home/wsco/jie_ws/src/act-plus-plus/aloha_scripts/data/vis_data/' + task_name
+    if not os.path.exists(vis_data_dir):
+        try:
+            os.makedirs(vis_data_dir)
+            print(f"文件夹 {vis_data_dir} 创建成功")
+        except Exception as e:
+            print(f"创建文件夹 {vis_data_dir} 时发生错误: {e}")
     episode_idx = args['episode_idx']
     ismirror = args['ismirror']
     if ismirror:
@@ -70,9 +78,9 @@ def main(args):
 
     qpos, qvel, effort, action, image_dict = load_hdf5(dataset_dir, dataset_name)
     print('hdf5 loaded!!')
-    save_videos(image_dict, DT, video_path=os.path.join(dataset_dir, dataset_name + '_video.mp4'))
+    save_videos(image_dict, DT, video_path=os.path.join(vis_data_dir, dataset_name + '_video.mp4'))
     # save_videos(compress_image_dict, DT, video_path=os.path.join(dataset_dir, dataset_name + '_compress_video.mp4'))
-    visualize_joints(qpos, action, plot_path=os.path.join(dataset_dir, dataset_name + '_qpos.png'))
+    visualize_joints(qpos, action, plot_path=os.path.join(vis_data_dir, dataset_name + '_qpos.png'))
     # visualize_single(effort, 'effort', plot_path=os.path.join(dataset_dir, dataset_name + '_effort.png'))
     # visualize_single(action - qpos, 'tracking_error', plot_path=os.path.join(dataset_dir, dataset_name + '_error.png'))
     # visualize_base(base_action, plot_path=os.path.join(dataset_dir, dataset_name + '_base_action.png'))
@@ -235,5 +243,6 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--dataset_dir', action='store', type=str, help='Dataset dir.', required=True)
     parser.add_argument('--episode_idx', action='store', type=int, help='Episode index.', required=False)
+    parser.add_argument('--task_name', action='store', type=str, help='Task name.', required=False)
     parser.add_argument('--ismirror', action='store_true')
     main(vars(parser.parse_args()))

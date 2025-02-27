@@ -21,6 +21,8 @@ from policy import ACTPolicy, CNNMLPPolicy, DiffusionPolicy
 from visualize_episodes import save_videos
 
 from detr.models.latent_model import Latent_Model_Transformer
+from ros_sub_data import DataRecorder
+import rospy
 
 # from sim_env import BOX_POSE
 
@@ -69,7 +71,7 @@ def main(args):
     name_filter = task_config.get('name_filter', lambda n: True)
 
     # fixed parameters
-    state_dim = 6
+    state_dim = 12
     lr_backbone = 1e-5
     backbone = 'resnet18'
     if policy_class == 'ACT':
@@ -90,14 +92,14 @@ def main(args):
                          'vq': args['use_vq'],
                          'vq_class': args['vq_class'],
                          'vq_dim': args['vq_dim'],
-                         'action_dim': 6,#org:16
+                         'action_dim': 12,#org:16
                          'no_encoder': args['no_encoder'],
                          }
     elif policy_class == 'Diffusion':
 
         policy_config = {'lr': args['lr'],
                          'camera_names': camera_names,
-                         'action_dim': 16,
+                         'action_dim': 12,
                          'observation_horizon': 1,
                          'action_horizon': 8,
                          'prediction_horizon': args['chunk_size'],
@@ -153,16 +155,10 @@ def main(args):
     with open(config_path, 'wb') as f:
         pickle.dump(config, f) ## 将config对象序列化并写入文件
     if is_eval:
-        ckpt_names = [f'policy_last.ckpt']
-        results = []
+        # ckpt_names = [f'policy_last.ckpt']
+        ckpt_names = [f'policy_best.ckpt']
         for ckpt_name in ckpt_names:
-            success_rate, avg_return = eval_bc(config, ckpt_name, save_episode=True, num_rollouts=10)
-            # wandb.log({'success_rate': success_rate, 'avg_return': avg_return})
-            results.append([ckpt_name, success_rate, avg_return])
-
-        for ckpt_name, success_rate, avg_return in results:
-            print(f'{ckpt_name}: {success_rate=} {avg_return=}')
-        print()
+            eval_bc(config, ckpt_name, save_episode=True, num_rollouts=10)
         exit()
 
     train_dataloader, val_dataloader, stats, _ = load_data(dataset_dir, name_filter, camera_names, batch_size_train, batch_size_val, args['chunk_size'], args['skip_mirrored_data'], config['load_pretrain'], policy_class, stats_dir_l=stats_dir, sample_weights=sample_weights, train_ratio=train_ratio)
@@ -206,10 +202,10 @@ def make_optimizer(policy_class, policy):
     return optimizer
 
 
-def get_image(ts, camera_names, rand_crop_resize=False):
+def get_image(obs, camera_names, rand_crop_resize=False):
     curr_images = []
     for cam_name in camera_names:
-        curr_image = rearrange(ts.observation['images'][cam_name], 'h w c -> c h w')
+        curr_image = rearrange(obs['images'][cam_name], 'h w c -> c h w')
         curr_images.append(curr_image)
     curr_image = np.stack(curr_images, axis=0)
     curr_image = torch.from_numpy(curr_image / 255.0).float().cuda().unsqueeze(0)
@@ -298,239 +294,123 @@ def eval_bc(config, ckpt_name, save_episode=True, num_rollouts=50):
     else:
         post_process = lambda a: a * stats['action_std'] + stats['action_mean']
 
-    # load environment
-    if real_robot:
-        from aloha_scripts.robot_utils import move_grippers # requires aloha
-        from aloha_scripts.real_env import make_real_env # requires aloha
-        env = make_real_env(init_node=True, setup_robots=True, setup_base=True)
-        env_max_reward = 0
-    else:
-        from sim_env import make_sim_env
-        env = make_sim_env(task_name)
-        env_max_reward = env.task.max_reward
-
     query_frequency = policy_config['num_queries']
     if temporal_agg:
         query_frequency = 1
         num_queries = policy_config['num_queries']
-    if real_robot:
-        BASE_DELAY = 13
-        query_frequency -= BASE_DELAY
 
     max_timesteps = int(max_timesteps * 1) # may increase for real-world tasks
 
-    episode_returns = []
-    highest_rewards = []
-    for rollout_id in range(num_rollouts):
-        if real_robot:
-            e()
-        rollout_id += 0
-        ### set task
-        # if 'sim_transfer_cube' in task_name:
-        #     BOX_POSE[0] = sample_box_pose() # used in sim reset
-        # elif 'sim_insertion' in task_name:
-        #     BOX_POSE[0] = np.concatenate(sample_insertion_pose()) # used in sim reset
+    ### evaluation loop
+    if temporal_agg:
+        # all_time_actions = torch.zeros([max_timesteps, max_timesteps+num_queries, 16]).cuda() #org
+        all_time_actions = torch.zeros([max_timesteps, max_timesteps+num_queries, state_dim]).cuda()
 
-        ts = env.reset()
+    # qpos_history = torch.zeros((1, max_timesteps, state_dim)).cuda()
+    qpos_history_raw = np.zeros((max_timesteps, state_dim))
+    image_list = [] # for visualization
+    # if use_actuator_net:
+    #     norm_episode_all_base_actions = [actuator_norm(np.zeros(history_len, 2)).tolist()]
+    
+    #初始化订阅观测类，订阅joints, hand, images
+    # print(f"camera_name : {camera_names}")
+    # sub_data = DataRecorder(camera_names)
+    # camera_name_topic_dict = {'cam_high':"/cam_high/color/image_raw",
+    #                         # 'cam_left':"/cam_left/color/image_raw",
+    #                         'cam_right':"/cam_right/color/image_raw"}
+    sub_data = DataRecorder(camera_names)
+    while True:
+        # obs = sub_data.get_obs_no_finger()
+        obs = sub_data.get_obs()
+        if obs is False:
+            rospy.sleep(0.1)
+            continue
+        else: break
+    
+    with torch.inference_mode():
+        time0 = time.time()
+        for t in range(max_timesteps):
+            time1 = time.time()
 
-        ### onscreen render
-        if onscreen_render:
-            plt.figure(figsize=(9, 8))
-            ax = plt.subplot()
-            plt_img = ax.imshow(env._physics.render(height=480, width=640, camera_id=onscreen_cam))
-            plt.ion()
+            ### process previous timestep to get qpos and image_list
+            time2 = time.time()
+            # obs = sub_data.get_obs_no_finger()
+            obs = sub_data.get_obs()
+            qpos_numpy = np.array(obs['qpos'])
+            qpos_history_raw[t] = qpos_numpy
+            qpos = pre_process(qpos_numpy)
+            qpos = torch.from_numpy(qpos).float().cuda().unsqueeze(0)
+            # qpos_history[:, t] = qpos
+            # curr_image = obs['img_all']
+            curr_image = get_image(obs, camera_names, rand_crop_resize=(config['policy_class'] == 'Diffusion'))
 
-        ### evaluation loop
-        if temporal_agg:
-            all_time_actions = torch.zeros([max_timesteps, max_timesteps+num_queries, 16]).cuda()
-
-        # qpos_history = torch.zeros((1, max_timesteps, state_dim)).cuda()
-        qpos_history_raw = np.zeros((max_timesteps, state_dim))
-        image_list = [] # for visualization
-        qpos_list = []
-        target_qpos_list = []
-        rewards = []
-        # if use_actuator_net:
-        #     norm_episode_all_base_actions = [actuator_norm(np.zeros(history_len, 2)).tolist()]
-        with torch.inference_mode():
-            time0 = time.time()
-            DT = 1 / FPS
-            culmulated_delay = 0 
-            for t in range(max_timesteps):
+            if t == 0:
+                # warm up
+                for _ in range(10):
+                    policy(qpos, curr_image)
+                print('network warm up done')
                 time1 = time.time()
-                ### update onscreen render and wait for DT
-                if onscreen_render:
-                    image = env._physics.render(height=480, width=640, camera_id=onscreen_cam)
-                    plt_img.set_data(image)
-                    plt.pause(DT)
 
-                ### process previous timestep to get qpos and image_list
-                time2 = time.time()
-                obs = ts.observation
-                if 'images' in obs:
-                    image_list.append(obs['images'])
-                else:
-                    image_list.append({'main': obs['image']})
-                qpos_numpy = np.array(obs['qpos'])
-                qpos_history_raw[t] = qpos_numpy
-                qpos = pre_process(qpos_numpy)
-                qpos = torch.from_numpy(qpos).float().cuda().unsqueeze(0)
-                # qpos_history[:, t] = qpos
+            ### query policy
+            time3 = time.time()
+            if config['policy_class'] == "ACT":
                 if t % query_frequency == 0:
-                    curr_image = get_image(ts, camera_names, rand_crop_resize=(config['policy_class'] == 'Diffusion'))
-                # print('get image: ', time.time() - time2)
-
-                if t == 0:
-                    # warm up
-                    for _ in range(10):
-                        policy(qpos, curr_image)
-                    print('network warm up done')
-                    time1 = time.time()
-
-                ### query policy
-                time3 = time.time()
-                if config['policy_class'] == "ACT":
-                    if t % query_frequency == 0:
-                        if vq:
-                            if rollout_id == 0:
-                                for _ in range(10):
-                                    vq_sample = latent_model.generate(1, temperature=1, x=None)
-                                    print(torch.nonzero(vq_sample[0])[:, 1].cpu().numpy())
-                            vq_sample = latent_model.generate(1, temperature=1, x=None)
-                            all_actions = policy(qpos, curr_image, vq_sample=vq_sample)
-                        else:
-                            # e()
-                            all_actions = policy(qpos, curr_image)
-                        # if use_actuator_net:
-                        #     collect_base_action(all_actions, norm_episode_all_base_actions)
-                        if real_robot:
-                            all_actions = torch.cat([all_actions[:, :-BASE_DELAY, :-2], all_actions[:, BASE_DELAY:, -2:]], dim=2)
-                    if temporal_agg:
-                        all_time_actions[[t], t:t+num_queries] = all_actions
-                        actions_for_curr_step = all_time_actions[:, t]
-                        actions_populated = torch.all(actions_for_curr_step != 0, axis=1)
-                        actions_for_curr_step = actions_for_curr_step[actions_populated]
-                        k = 0.01
-                        exp_weights = np.exp(-k * np.arange(len(actions_for_curr_step)))
-                        exp_weights = exp_weights / exp_weights.sum()
-                        exp_weights = torch.from_numpy(exp_weights).cuda().unsqueeze(dim=1)
-                        raw_action = (actions_for_curr_step * exp_weights).sum(dim=0, keepdim=True)
-                    else:
-                        raw_action = all_actions[:, t % query_frequency]
-                        # if t % query_frequency == query_frequency - 1:
-                        #     # zero out base actions to avoid overshooting
-                        #     raw_action[0, -2:] = 0
-                elif config['policy_class'] == "Diffusion":
-                    if t % query_frequency == 0:
-                        all_actions = policy(qpos, curr_image)
-                        # if use_actuator_net:
-                        #     collect_base_action(all_actions, norm_episode_all_base_actions)
-                        if real_robot:
-                            all_actions = torch.cat([all_actions[:, :-BASE_DELAY, :-2], all_actions[:, BASE_DELAY:, -2:]], dim=2)
-                    raw_action = all_actions[:, t % query_frequency]
-                elif config['policy_class'] == "CNNMLP":
-                    raw_action = policy(qpos, curr_image)
-                    all_actions = raw_action.unsqueeze(0)
+                    all_actions = policy(qpos, curr_image)
                     # if use_actuator_net:
                     #     collect_base_action(all_actions, norm_episode_all_base_actions)
+                if temporal_agg:
+                    print(f"t: {t}")
+                    # print(f"all_actions: {all_actions}")
+                    all_time_actions[[t], t:t+num_queries] = all_actions
+                    actions_for_curr_step = all_time_actions[:, t]
+                    actions_populated = torch.all(actions_for_curr_step != 0, axis=1)
+                    actions_for_curr_step = actions_for_curr_step[actions_populated]
+                    k = 0.01
+                    exp_weights = np.exp(-k * np.arange(len(actions_for_curr_step)))
+                    exp_weights = exp_weights / exp_weights.sum()
+                    exp_weights = torch.from_numpy(exp_weights).cuda().unsqueeze(dim=1)
+                    raw_action = (actions_for_curr_step * exp_weights).sum(dim=0, keepdim=True)
                 else:
-                    raise NotImplementedError
-                # print('query policy: ', time.time() - time3)
-
-                ### post-process actions
-                time4 = time.time()
-                raw_action = raw_action.squeeze(0).cpu().numpy()
-                action = post_process(raw_action)
-                target_qpos = action[:-2]
-
+                    raw_action = all_actions[:, t % query_frequency]
+                    # if t % query_frequency == query_frequency - 1:
+                    #     # zero out base actions to avoid overshooting
+                    #     raw_action[0, -2:] = 0
+            elif config['policy_class'] == "Diffusion":
+                if t % query_frequency == 0:
+                    all_actions = policy(qpos, curr_image)
+                    # if use_actuator_net:
+                    #     collect_base_action(all_actions, norm_episode_all_base_actions)
+                raw_action = all_actions[:, t % query_frequency]
+            elif config['policy_class'] == "CNNMLP":
+                raw_action = policy(qpos, curr_image)
+                all_actions = raw_action.unsqueeze(0)
                 # if use_actuator_net:
-                #     assert(not temporal_agg)
-                #     if t % prediction_len == 0:
-                #         offset_start_ts = t + history_len
-                #         actuator_net_in = np.array(norm_episode_all_base_actions[offset_start_ts - history_len: offset_start_ts + future_len])
-                #         actuator_net_in = torch.from_numpy(actuator_net_in).float().unsqueeze(dim=0).cuda()
-                #         pred = actuator_network(actuator_net_in)
-                #         base_action_chunk = actuator_unnorm(pred.detach().cpu().numpy()[0])
-                #     base_action = base_action_chunk[t % prediction_len]
-                # else:
-                base_action = action[-2:]   #从action字符串的倒数第二个字符开始切片，一直到字符串的末尾。
-                # base_action = calibrate_linear_vel(base_action, c=0.19)
-                # base_action = postprocess_base_action(base_action)
-                # print('post process: ', time.time() - time4)
+                #     collect_base_action(all_actions, norm_episode_all_base_actions)
+            else:
+                raise NotImplementedError
+            # print('query policy: ', time.time() - time3)
 
-                ### step the environment
-                time5 = time.time()
-                if real_robot:
-                    ts = env.step(target_qpos, base_action)
-                else:
-                    ts = env.step(target_qpos)
-                # print('step env: ', time.time() - time5)
+            ### post-process actions
+            time4 = time.time()
+            raw_action = raw_action.squeeze(0).cpu().numpy()
+            action = post_process(raw_action)
+            print(f"action: {action}")
 
-                ### for visualization
-                qpos_list.append(qpos_numpy)
-                target_qpos_list.append(target_qpos)
-                rewards.append(ts.reward)
-                duration = time.time() - time1
-                sleep_time = max(0, DT - duration)
-                # print(sleep_time)
-                time.sleep(sleep_time)
-                # time.sleep(max(0, DT - duration - culmulated_delay))
-                if duration >= DT:
-                    culmulated_delay += (duration - DT)
-                    print(f'Warning: step duration: {duration:.3f} s at step {t} longer than DT: {DT} s, culmulated delay: {culmulated_delay:.3f} s')
-                # else:
-                #     culmulated_delay = max(0, culmulated_delay - (DT - duration))
+            # if use_actuator_net:
+            #     assert(not temporal_agg)
+            #     if t % prediction_len == 0:
+            #         offset_start_ts = t + history_len
+            #         actuator_net_in = np.array(norm_episode_all_base_actions[offset_start_ts - history_len: offset_start_ts + future_len])
+            #         actuator_net_in = torch.from_numpy(actuator_net_in).float().unsqueeze(dim=0).cuda()
+            #         pred = actuator_network(actuator_net_in)
+            #         base_action_chunk = actuator_unnorm(pred.detach().cpu().numpy()[0])
+            #     base_action = base_action_chunk[t % prediction_len]
+            # else:
 
-            print(f'Avg fps {max_timesteps / (time.time() - time0)}')
-            plt.close()
-        if real_robot:
-            move_grippers([env.puppet_bot_left, env.puppet_bot_right], [PUPPET_GRIPPER_JOINT_OPEN] * 2, move_time=0.5)  # open
-            # save qpos_history_raw
-            log_id = get_auto_index(ckpt_dir)
-            np.save(os.path.join(ckpt_dir, f'qpos_{log_id}.npy'), qpos_history_raw)
-            plt.figure(figsize=(10, 20))
-            # plot qpos_history_raw for each qpos dim using subplots
-            for i in range(state_dim):
-                plt.subplot(state_dim, 1, i+1)
-                plt.plot(qpos_history_raw[:, i])
-                # remove x axis
-                if i != state_dim - 1:
-                    plt.xticks([])
-            plt.tight_layout()
-            plt.savefig(os.path.join(ckpt_dir, f'qpos_{log_id}.png'))
-            plt.close()
-
-
-        rewards = np.array(rewards)
-        episode_return = np.sum(rewards[rewards!=None])
-        episode_returns.append(episode_return)
-        episode_highest_reward = np.max(rewards)
-        highest_rewards.append(episode_highest_reward)
-        print(f'Rollout {rollout_id}\n{episode_return=}, {episode_highest_reward=}, {env_max_reward=}, Success: {episode_highest_reward==env_max_reward}')
-
-        # if save_episode:
-        #     save_videos(image_list, DT, video_path=os.path.join(ckpt_dir, f'video{rollout_id}.mp4'))
-
-    success_rate = np.mean(np.array(highest_rewards) == env_max_reward)
-    avg_return = np.mean(episode_returns)
-    summary_str = f'\nSuccess rate: {success_rate}\nAverage return: {avg_return}\n\n'
-    for r in range(env_max_reward+1):
-        more_or_equal_r = (np.array(highest_rewards) >= r).sum()
-        more_or_equal_r_rate = more_or_equal_r / num_rollouts
-        summary_str += f'Reward >= {r}: {more_or_equal_r}/{num_rollouts} = {more_or_equal_r_rate*100}%\n'
-
-    print(summary_str)
-
-    # save success rate to txt
-    result_file_name = 'result_' + ckpt_name.split('.')[0] + '.txt'
-    with open(os.path.join(ckpt_dir, result_file_name), 'w') as f:
-        f.write(summary_str)
-        f.write(repr(episode_returns))
-        f.write('\n\n')
-        f.write(repr(highest_rewards))
-
-    return success_rate, avg_return
-
+            ### step the environment
+            # sub_data.control_arm(action)
+            sub_data.control_arm_finger(action)
+            rospy.sleep(0.1)
 
 def forward_pass(data, policy):
     image_data, qpos_data, action_data, is_pad = data
@@ -686,6 +566,7 @@ def repeater(data_loader):
 
 
 if __name__ == '__main__':
+    rospy.init_node('eval_arm_hand')
     parser = argparse.ArgumentParser()
     parser.add_argument('--eval', action='store_true')
     parser.add_argument('--onscreen_render', action='store_true')

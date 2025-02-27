@@ -64,13 +64,13 @@ class DataRecorder:
         self.robot.LoggerInit()
         self.robot.SetLoggerLevel(4)
         
-        # # 实例化 ModbusClient
-        # self.modbus_client = ModbusClient(serial_port_name="/dev/ttyUSB0", slave_id=1)  # 替换为实际的串口名称
+        # 实例化 ModbusClient 1是左手，2是右手
+        self.modbus_client = ModbusClient(serial_port_name="/dev/ttyUSB0", slave_id=1)  # 替换为实际的串口名称
 
-        # # 连接设备
-        # if not self.modbus_client.connect():
-        #     print("Failed to connect to Modbus device")
-        #     return
+        # 连接设备
+        if not self.modbus_client.connect():
+            print("Failed to connect to Modbus device")
+            return
 
         # callback(data) 是 make_callback 返回的回调函数，它会在接收到图像消息时执行。
         def make_callback(cam_name, bridge, image_buffer, image_shape):
@@ -188,7 +188,8 @@ class DataRecorder:
 
     
     def control_gripper(self, action_list):
-        self.modbus_client.set_finger_status(action_list)
+        int_action_list = [int(i) for i in action_list]
+        self.modbus_client.set_finger_status(int_action_list)
     
     def control_arm(self, target_qpos):
         # 将每个弧度值转换为角度值

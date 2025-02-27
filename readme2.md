@@ -164,6 +164,7 @@ act-plus-plus
 python3 visualize_episodes.py --dataset_dir <data save dir> --episode_idx 0
 
 python3 visualize_episodes.py --dataset_dir data/sim_transfer_cube_scripted --episode_idx 9
+python3 visualize_episodes_jie_single_arm.py --dataset_dir data/aloha_mobile_pick_fruit3 --task_name aloha_pick_fruit3 --episode_idx 9 
 # --episode_idx 场景索引号
 # 终端打印
 # Saved video to: data/sim_transfer_cube_scripted/episode_0_video.mp4

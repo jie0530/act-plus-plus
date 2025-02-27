@@ -27,6 +27,18 @@ TASK_CONFIGS = {
                         # 'cam_right':"/cam_right/color/image_raw"
                         }
     },
+    'aloha_mobile_pick_fruit3':{
+        # 'dataset_dir': DATA_DIR + '/aloha_mobile_pick_fruit',
+        'dataset_dir': '/home/wsco/jie_ws/src/act-plus-plus/aloha_scripts/data/aloha_mobile_pick_fruit3',
+        'train_ratio': 0.92,
+        'episode_len': 350,
+        # 'camera_names': ['cam_high', 'cam_left', 'cam_right']
+        'camera_names': {'cam_high':"/cam_high/color/image_raw",
+                        'cam_left':"/cam_left/color/image_raw"
+                        # 'cam_right':"/cam_right/color/image_raw"
+                        }
+    },
+    
     # elevator
     'aloha_mobile_elevator':{
         'dataset_dir': DATA_DIR + '/aloha_mobile_elevator',

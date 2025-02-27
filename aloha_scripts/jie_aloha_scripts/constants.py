@@ -4,14 +4,16 @@ import os
 
 DATA_DIR = os.path.join('/'.join(__file__.split('/')[:-2]),'data')
 TASK_CONFIGS = { 
-    'aloha_mobile_pick_fruit':{
+    'aloha_mobile_pick_fruit3':{
         'dataset_dir': DATA_DIR + '/aloha_mobile_pick_fruit3',
         'train_ratio': 0.92,
-        'episode_len': 500,
+        'episode_len': 350,
         # 'camera_names': ['cam_high', 'cam_left', 'cam_right']
-        'camera_names': {'cam_high':"/cam_high/color/image_raw",
-                        # 'cam_left':"/cam_left/color/image_raw",
-                        'cam_right':"/cam_right/color/image_raw"}
+        'camera_names': {
+                        'cam_high':"/cam_high/color/image_raw",
+                        'cam_left':"/cam_left/color/image_raw"
+                        # 'cam_right':"/cam_right/color/image_raw"
+                        }
     },
     # elevator
     'aloha_mobile_elevator':{

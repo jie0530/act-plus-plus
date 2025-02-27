@@ -5,7 +5,7 @@ outputs
 data
 data_local
 aloha_scripts/data
-trainings_6_20_512_5000
+trainings*
 .vscode
 _wandb
 

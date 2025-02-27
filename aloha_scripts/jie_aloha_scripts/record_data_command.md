@@ -1,0 +1,6 @@
+1. 手部信息：
+   [动捕系统]roslaunch vrpn_client_ros sample.launch server:=192.168.1.113
+   [灵巧手控制] cd ~/jie_ws/src/stark-serialport-example/python/modbus_example && python3 test_left_op_avatar.py
+
+2. 相机：scam
+3. 机械臂： cd ~/jie_ws/src/fairino-python-sdk-master/linux/examples && python3 robot_state_pub.py
