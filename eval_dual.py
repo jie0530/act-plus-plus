@@ -23,6 +23,7 @@ from visualize_episodes import save_videos
 from detr.models.latent_model import Latent_Model_Transformer
 from ros_sub_data import DataRecorder
 import rospy
+import h5py
 
 # from sim_env import BOX_POSE
 
@@ -41,6 +42,7 @@ def main(args):
     # command line parameters
     is_eval = args['eval']
     ckpt_dir = args['ckpt_dir']
+    hand_ckpt_dir = args['hand_ckpt_dir']
     policy_class = args['policy_class']
     onscreen_render = args['onscreen_render']
     task_name = args['task_name']
@@ -127,6 +129,7 @@ def main(args):
         'validate_every': validate_every,#act没有用到
         'save_every': save_every,#act没有用到
         'ckpt_dir': ckpt_dir,
+        'hand_ckpt_dir': hand_ckpt_dir,
         'resume_ckpt_path': resume_ckpt_path,
         'episode_len': episode_len,
         'state_dim': state_dim,
@@ -146,6 +149,11 @@ def main(args):
     if not os.path.isdir(ckpt_dir):
         os.makedirs(ckpt_dir)
     config_path = os.path.join(ckpt_dir, 'config.pkl')
+    
+    if not os.path.isdir(hand_ckpt_dir):
+        os.makedirs(hand_ckpt_dir)
+    hand_config_path = os.path.join(hand_ckpt_dir, 'config.pkl')
+    
     expr_name = ckpt_dir.split('/')[-1]
     # WandB**（全称：Weights & Biases）是一个为机器学习和深度学习项目提供可视化、追踪和协作功能的工具平台。
     # 它帮助研究人员和开发者在训练模型时进行高效的实验管理和结果可视化。
@@ -153,6 +161,8 @@ def main(args):
     #     wandb.init(project="mobile-aloha2", reinit=True, entity="mobile-aloha2", name=expr_name)
     #     wandb.config.update(config)
     with open(config_path, 'wb') as f:
+        pickle.dump(config, f) ## 将config对象序列化并写入文件
+    with open(hand_config_path, 'wb') as f:
         pickle.dump(config, f) ## 将config对象序列化并写入文件
     if is_eval:
         # ckpt_names = [f'policy_last.ckpt']
@@ -228,6 +238,7 @@ def get_image(obs, camera_names, rand_crop_resize=False):
 def eval_bc(config, ckpt_name, save_episode=True, num_rollouts=50):
     set_seed(1000)
     ckpt_dir = config['ckpt_dir']
+    hand_ckpt_dir = config['hand_ckpt_dir']
     state_dim = config['state_dim']
     real_robot = config['real_robot']
     policy_class = config['policy_class']
@@ -243,13 +254,27 @@ def eval_bc(config, ckpt_name, save_episode=True, num_rollouts=50):
     actuator_config = config['actuator_config']
     use_actuator_net = actuator_config['actuator_network_dir'] is not None
 
+    # To store the actions
+    inference_actions = []
+    inference_hand_actions = []
+    ground_truth_actions = []  # Assuming ground truth actions are available or can be extracted
+
     # load policy and stats
     ckpt_path = os.path.join(ckpt_dir, ckpt_name)
+    hand_ckpt_path = os.path.join(hand_ckpt_dir, ckpt_name)
+    
     policy = make_policy(policy_class, policy_config)
+    hand_policy = make_policy(policy_class, policy_config)
     loading_status = policy.deserialize(torch.load(ckpt_path))
+    loading_hand_status = hand_policy.deserialize(torch.load(hand_ckpt_path))
+    
     print(loading_status)
+    print(loading_hand_status)
+    
     policy.cuda()
     policy.eval()
+    hand_policy.cuda()
+    hand_policy.eval()
     if vq:
         vq_dim = config['policy_config']['vq_dim']
         vq_class = config['policy_config']['vq_class']
@@ -261,9 +286,14 @@ def eval_bc(config, ckpt_name, save_episode=True, num_rollouts=50):
         print(f'Loaded policy from: {ckpt_path}, latent model from: {latent_model_ckpt_path}')
     else:
         print(f'Loaded: {ckpt_path}')
+        print(f'Loaded hand ckpt: {hand_ckpt_path}')
     stats_path = os.path.join(ckpt_dir, f'dataset_stats.pkl')
     with open(stats_path, 'rb') as f:
         stats = pickle.load(f)
+        
+    hand_stats_path = os.path.join(hand_ckpt_dir, f'dataset_stats.pkl')
+    with open(hand_stats_path, 'rb') as f:
+        hand_stats = pickle.load(f)        
     # if use_actuator_net:
     #     prediction_len = actuator_config['prediction_len']
     #     future_len = actuator_config['future_len']
@@ -289,10 +319,13 @@ def eval_bc(config, ckpt_name, save_episode=True, num_rollouts=50):
     #         norm_episode_all_base_actions += actuator_norm(post_processed_actions[:, -2:]).tolist()
 
     pre_process = lambda s_qpos: (s_qpos - stats['qpos_mean']) / stats['qpos_std']
+    hand_pre_process = lambda hand_s_qpos: (hand_s_qpos - hand_stats['qpos_mean']) / hand_stats['qpos_std']
+    
     if policy_class == 'Diffusion':
         post_process = lambda a: ((a + 1) / 2) * (stats['action_max'] - stats['action_min']) + stats['action_min']
     else:
         post_process = lambda a: a * stats['action_std'] + stats['action_mean']
+        hand_post_process = lambda a: a * hand_stats['action_std'] + hand_stats['action_mean']
 
     query_frequency = policy_config['num_queries']
     if temporal_agg:
@@ -305,10 +338,13 @@ def eval_bc(config, ckpt_name, save_episode=True, num_rollouts=50):
     if temporal_agg:
         # all_time_actions = torch.zeros([max_timesteps, max_timesteps+num_queries, 16]).cuda() #org
         all_time_actions = torch.zeros([max_timesteps, max_timesteps+num_queries, state_dim]).cuda()
+        all_time_hand_actions = torch.zeros([max_timesteps, max_timesteps+num_queries, state_dim]).cuda()
+
+    # image_list = [] # for visualization
 
     # qpos_history = torch.zeros((1, max_timesteps, state_dim)).cuda()
-    qpos_history_raw = np.zeros((max_timesteps, state_dim))
-    image_list = [] # for visualization
+    # qpos_history_raw = np.zeros((max_timesteps, state_dim))
+
     # if use_actuator_net:
     #     norm_episode_all_base_actions = [actuator_norm(np.zeros(history_len, 2)).tolist()]
     
@@ -320,7 +356,7 @@ def eval_bc(config, ckpt_name, save_episode=True, num_rollouts=50):
     #                         'cam_right':"/cam_right/color/image_raw"}
     sub_data = DataRecorder(camera_names)
     while True:
-        obs = sub_data.get_obs_arm()
+        obs = sub_data.get_obs()
         if obs is False:
             rospy.sleep(0.1)
             continue
@@ -335,25 +371,35 @@ def eval_bc(config, ckpt_name, save_episode=True, num_rollouts=50):
             time2 = time.time()
             obs = sub_data.get_obs_arm()
             qpos_numpy = np.array(obs['qpos'])
-            qpos_history_raw[t] = qpos_numpy
+            
+            hand_obs = sub_data.get_obs_hand()
+            hand_qpos_numpy = np.array(hand_obs['qpos'])
+            
+            # qpos_history_raw[t] = qpos_numpy
             qpos = pre_process(qpos_numpy)
             qpos = torch.from_numpy(qpos).float().cuda().unsqueeze(0)
+            hand_qpos = hand_pre_process(hand_qpos_numpy)
+            hand_qpos = torch.from_numpy(hand_qpos).float().cuda().unsqueeze(0)
+            
             # qpos_history[:, t] = qpos
             # curr_image = obs['img_all']
             curr_image = get_image(obs, camera_names, rand_crop_resize=(config['policy_class'] == 'Diffusion'))
 
-            if t == 0:
-                # warm up
-                for _ in range(10):
-                    policy(qpos, curr_image)
-                print('network warm up done')
-                time1 = time.time()
+            # if t == 0:
+            #     # warm up
+            #     for _ in range(10):
+            #         policy(qpos, curr_image)
+            #         hand_policy(qpos, curr_image)
+            #     print('network warm up done')
+            #     time1 = time.time()
 
             ### query policy
             time3 = time.time()
             if config['policy_class'] == "ACT":
                 if t % query_frequency == 0:
                     all_actions = policy(qpos, curr_image)
+                    all_hand_actions = hand_policy(qpos, curr_image)
+                    
                     # if use_actuator_net:
                     #     collect_base_action(all_actions, norm_episode_all_base_actions)
                 if temporal_agg:
@@ -368,20 +414,37 @@ def eval_bc(config, ckpt_name, save_episode=True, num_rollouts=50):
                     exp_weights = exp_weights / exp_weights.sum()
                     exp_weights = torch.from_numpy(exp_weights).cuda().unsqueeze(dim=1)
                     raw_action = (actions_for_curr_step * exp_weights).sum(dim=0, keepdim=True)
+                    
+                    all_time_hand_actions[[t], t:t+num_queries] = all_hand_actions
+                    hand_actions_for_curr_step = all_time_hand_actions[:, t]
+                    hand_actions_populated = torch.all(hand_actions_for_curr_step != 0, axis=1)
+                    hand_actions_for_curr_step = hand_actions_for_curr_step[hand_actions_populated]
+                    k = 0.01
+                    exp_weights = np.exp(-k * np.arange(len(hand_actions_for_curr_step)))
+                    exp_weights = exp_weights / exp_weights.sum()
+                    exp_weights = torch.from_numpy(exp_weights).cuda().unsqueeze(dim=1)
+                    raw_hand_action = (hand_actions_for_curr_step * exp_weights).sum(dim=0, keepdim=True)
+                    
                 else:
                     raw_action = all_actions[:, t % query_frequency]
+                    raw_hand_action = all_hand_actions[:, t % query_frequency]
+                    
                     # if t % query_frequency == query_frequency - 1:
                     #     # zero out base actions to avoid overshooting
                     #     raw_action[0, -2:] = 0
             elif config['policy_class'] == "Diffusion":
                 if t % query_frequency == 0:
                     all_actions = policy(qpos, curr_image)
+                    all_hand_actions = hand_policy(qpos, curr_image)
                     # if use_actuator_net:
                     #     collect_base_action(all_actions, norm_episode_all_base_actions)
                 raw_action = all_actions[:, t % query_frequency]
+                raw_hand_action = all_hand_actions[:, t % query_frequency]
             elif config['policy_class'] == "CNNMLP":
                 raw_action = policy(qpos, curr_image)
+                raw_action = hand_policy(qpos, curr_image)
                 all_actions = raw_action.unsqueeze(0)
+                all_hand_actions = raw_hand_action.unsqueeze(0)
                 # if use_actuator_net:
                 #     collect_base_action(all_actions, norm_episode_all_base_actions)
             else:
@@ -391,8 +454,11 @@ def eval_bc(config, ckpt_name, save_episode=True, num_rollouts=50):
             ### post-process actions
             time4 = time.time()
             raw_action = raw_action.squeeze(0).cpu().numpy()
+            raw_hand_action = raw_hand_action.squeeze(0).cpu().numpy()
             action = post_process(raw_action)
+            hand_action = hand_post_process(raw_hand_action)
             print(f"action: {action}")
+            print(f"hand_action: {hand_action}")
 
             # if use_actuator_net:
             #     assert(not temporal_agg)
@@ -407,7 +473,54 @@ def eval_bc(config, ckpt_name, save_episode=True, num_rollouts=50):
 
             ### step the environment
             sub_data.control_arm(action)
+            sub_data.control_finger(hand_action)
+            
             rospy.sleep(0.1)
+            inference_actions.append(action)
+            inference_hand_actions.append(hand_action)
+            
+        # After the inference loop in eval_bc
+        dataset_path = '/home/wsco/jie_ws/src/act-plus-plus/aloha_scripts/data/'+ task_name + '/episode_0.hdf5'
+        with h5py.File(dataset_path, 'r') as root:
+            ground_truth_actions = root['/action'][:, :6]
+            ground_truth_hand_actions = root['/action'][:, 6:]
+        visualize_actions(inference_actions, ground_truth_actions, 6, add_str='arm')
+        visualize_actions(inference_hand_actions, ground_truth_hand_actions, 6, add_str='hand')
+
+def visualize_actions(inference_actions, ground_truth_actions, rows_per_plot=3, add_str='arm'):
+    # Convert lists to numpy arrays for easier plotting
+    inference_actions = np.array(inference_actions)
+    ground_truth_actions = np.array(ground_truth_actions)
+    
+    # Assuming both inference and ground truth actions have the same dimensions
+    num_timesteps = inference_actions.shape[0]
+    num_joints = inference_actions.shape[1]
+    
+    # Calculate the number of plots needed
+    num_plots = (num_joints + rows_per_plot - 1) // rows_per_plot  # Ceiling division
+    
+    # Plot comparison for each joint or action
+    for plot_idx in range(num_plots):
+        start_idx = plot_idx * rows_per_plot
+        end_idx = min((plot_idx + 1) * rows_per_plot, num_joints)
+        num_rows = end_idx - start_idx
+        
+        fig, axs = plt.subplots(num_rows, 1, figsize=(10, 5 * num_rows))
+        
+        for i in range(num_rows):
+            joint_idx = start_idx + i
+            axs[i].plot(range(num_timesteps), inference_actions[:, joint_idx], label='Inference Action')
+            axs[i].plot(range(num_timesteps), ground_truth_actions[:, joint_idx], label='Ground Truth Action', linestyle='dashed')
+            axs[i].set_title(f'Action Comparison for Joint {joint_idx}')
+            axs[i].set_xlabel('Time Step')
+            axs[i].set_ylabel('Action Value')
+            axs[i].legend()
+        
+        plt.tight_layout()
+        plt.savefig(f"action_comparison_{plot_idx + 1}_{add_str}.png")
+        print(f'Saved action comparison plot to: action_comparison_{plot_idx + 1}_{add_str}.png')
+        plt.close()
+
 
 def forward_pass(data, policy):
     image_data, qpos_data, action_data, is_pad = data
@@ -568,6 +681,7 @@ if __name__ == '__main__':
     parser.add_argument('--eval', action='store_true')
     parser.add_argument('--onscreen_render', action='store_true')
     parser.add_argument('--ckpt_dir', action='store', type=str, help='ckpt_dir', required=True)
+    parser.add_argument('--hand_ckpt_dir', action='store', type=str, help='hand_ckpt_dir', required=True)
     parser.add_argument('--policy_class', action='store', type=str, help='policy_class, capitalize', required=True)
     parser.add_argument('--task_name', action='store', type=str, help='task_name', required=True)
     parser.add_argument('--batch_size', action='store', type=int, help='batch_size', required=True)

@@ -17,6 +17,7 @@
 
 
 6. 记一处错误：`ros_record_data.py`文件的220行`padded_compressed_image[:image_len] = compressed_image`，由于compressed_image图像shape发生改变，导致复制出现错误，之前`compressed_image.shape = (18868,1)`是个二维数组, 现在是`(18868，)`，是个一维数组，
+   [2025.3.12更新]目前发现是使用[3]个相机和[1~2]个相机录制数据集时，压缩图像的维度发生了变化。
 
 
 7. 输入的维度改为6后，The size of tensor a (8) must match the size of tensor b (22) at non-singleton dimension 0
@@ -24,3 +25,13 @@
 
 8. DataLoader worker (pid(s) 1620196) exited unexpectedly
    RuntimeError: DataLoader worker (pid 1620196) exited unexpectedly with exit code 1. Details are lost due to multiprocessing. Rerunning with num_workers=0 may give better error trace.
+
+9. QObject::moveToThread: Current thread (0x55fe321ad760) is not the object's
+   [原因]：opencv-python和pyqt5冲突是因为在opencv-python4.2.0以上的版本，将opencv将低版本到4.2.0以下
+   [解决]
+   ```
+   #卸载原版本
+   pip uninstall opencv-python
+   #安装指定版本
+   pip install opencv-python==4.1.2.30
+   ```

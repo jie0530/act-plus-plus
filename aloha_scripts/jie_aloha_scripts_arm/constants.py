@@ -159,8 +159,9 @@ IMAGE_SHAPE = (480, 640, 3)
 HISTORY_QPOS_LEN_SCALE = 0.4
 
 ### ALOHA fixed constants
-DT = 0.04
-FPS = 25
+# 频率改为20hz
+DT = 0.05
+FPS = 20
 JOINT_NAMES = ["r_L1", "r_L2", "r_L3", "r_L4", "r_L5", "r_L6","l_L1", "l_L2", "l_L3", "l_L4", "l_L5", "l_L6"]
 #START_ARM_POSE = [0.,-0.605,0.074,0.,1.479,0., 0.02239, -0.02239]
 START_ARM_POSE = [0.0, -1.29, 0.97, 0.0, 0.91, 0.]

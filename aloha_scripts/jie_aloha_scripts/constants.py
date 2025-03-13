@@ -4,15 +4,15 @@ import os
 
 DATA_DIR = os.path.join('/'.join(__file__.split('/')[:-2]),'data')
 TASK_CONFIGS = { 
-    'aloha_mobile_pick_fruit3':{
-        'dataset_dir': DATA_DIR + '/aloha_mobile_pick_fruit3',
+    'aloha_pick_fruit7':{
+        'dataset_dir': DATA_DIR + '/aloha_pick_fruit7',
         'train_ratio': 0.92,
-        'episode_len': 350,
+        'episode_len': 160,
         # 'camera_names': ['cam_high', 'cam_left', 'cam_right']
         'camera_names': {
                         'cam_high':"/cam_high/color/image_raw",
-                        'cam_left':"/cam_left/color/image_raw"
-                        # 'cam_right':"/cam_right/color/image_raw"
+                        'cam_left':"/cam_left/color/image_raw",
+                        'cam_right':"/cam_right/color/image_raw"
                         }
     },
     # elevator
@@ -161,8 +161,8 @@ IMAGE_SHAPE = (480, 640, 3)
 HISTORY_QPOS_LEN_SCALE = 0.4
 
 ### ALOHA fixed constants
-DT = 0.04
-FPS = 25
+DT = 0.05
+FPS = 20
 JOINT_NAMES = ["r_L1", "r_L2", "r_L3", "r_L4", "r_L5", "r_L6","l_L1", "l_L2", "l_L3", "l_L4", "l_L5", "l_L6"]
 #START_ARM_POSE = [0.,-0.605,0.074,0.,1.479,0., 0.02239, -0.02239]
 START_ARM_POSE = [0.0, -1.29, 0.97, 0.0, 0.91, 0.]

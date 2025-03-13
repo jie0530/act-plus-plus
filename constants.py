@@ -27,15 +27,16 @@ TASK_CONFIGS = {
                         # 'cam_right':"/cam_right/color/image_raw"
                         }
     },
-    'aloha_mobile_pick_fruit3':{
+    'aloha_pick_fruit7':{
         # 'dataset_dir': DATA_DIR + '/aloha_mobile_pick_fruit',
-        'dataset_dir': '/home/wsco/jie_ws/src/act-plus-plus/aloha_scripts/data/aloha_mobile_pick_fruit3',
+        'dataset_dir': '/home/wsco/jie_ws/src/act-plus-plus/aloha_scripts/data/aloha_pick_fruit7',
         'train_ratio': 0.92,
-        'episode_len': 350,
+        'episode_len': 160,
         # 'camera_names': ['cam_high', 'cam_left', 'cam_right']
-        'camera_names': {'cam_high':"/cam_high/color/image_raw",
-                        'cam_left':"/cam_left/color/image_raw"
-                        # 'cam_right':"/cam_right/color/image_raw"
+        'camera_names': {
+                        'cam_high':"/cam_high/color/image_raw",
+                        'cam_left':"/cam_left/color/image_raw",
+                        'cam_right':"/cam_right/color/image_raw"
                         }
     },
     

@@ -62,16 +62,16 @@ class EpisodicDataset(torch.utils.data.Dataset):
                     action = np.concatenate([root['/action'][()], base_action], axis=-1)
                 else:  
                     # action = root['/action'][()] #org
-                    action = root['/action'][:,:6] #只取手臂数据训练
+                    action = root['/action'][:,:7] #只取手臂数据+夹爪训练
                     # dummy_base_action = np.zeros([action.shape[0], 2])
                     # action = np.concatenate([action, dummy_base_action], axis=-1)
                 original_action_shape = action.shape
                 episode_len = original_action_shape[0]
                 # get observation at start_ts only
-                qpos = root['/observations/qpos'][:, :6]
+                qpos = root['/observations/qpos'][:, :7]
                 # qpos = root['/observations/qpos'][:, 6:]
                 qpos = qpos[start_ts]
-                qvel = root['/observations/qvel'][:, :6]
+                qvel = root['/observations/qvel'][:, :7]
                 # qvel = root['/observations/qvel'][:, 6:]
                 qvel = qvel[start_ts]
                 # qpos = root['/observations/qpos'][start_ts]
@@ -162,7 +162,7 @@ def get_norm_stats(dataset_path_list):
         try:
             with h5py.File(dataset_path, 'r') as root:
                 # qpos = root['/observations/qpos'][()] #org
-                qpos = root['/observations/qpos'][:,:6] #只取手臂数据训练
+                qpos = root['/observations/qpos'][:,:7] #只取手臂数据训练
                 # qpos = root['/observations/qpos'][:,6:] #只取手臂数据训练
                 # qvel = root['/observations/qvel'][()]
                 if '/base_action' in root:
@@ -171,7 +171,7 @@ def get_norm_stats(dataset_path_list):
                     action = np.concatenate([root['/action'][()], base_action], axis=-1)
                 else:
                     # action = root['/action'][()] #org
-                    action = root['/action'][:,:6] #只取手臂数据训练
+                    action = root['/action'][:,:7] #只取手臂数据训练
                     # action = root['/action'][:,6:] #只取手臂数据训练
                     # dummy_base_action = np.zeros([action.shape[0], 2])
                     # action = np.concatenate([action, dummy_base_action], axis=-1)

@@ -4,3 +4,6 @@
 
 2. 相机：scam
 3. 机械臂： cd ~/jie_ws/src/fairino-python-sdk-master/linux/examples && python3 robot_state_pub.py
+
+
+~/jie_ws/src/stark-serialport-example/python/modbus_example$ python3 ctrl_hand.py

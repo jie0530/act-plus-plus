@@ -1,6 +1,6 @@
 import rospy,sys,os,time
 from sensor_msgs.msg import JointState
-from std_msgs.msg import Int32MultiArray
+from std_msgs.msg import Int32MultiArray, Float32MultiArray
 from sensor_msgs.msg import Image
 from cv_bridge import CvBridge, CvBridgeError
 import cv2
@@ -48,8 +48,8 @@ class DataRecorder:
         self.joint_states_sub = rospy.Subscriber('/joint_states', JointState, lambda msg: setattr(self, 'joint_msg', msg))  
         # self.left_action_gripper_msg:Int32MultiArray = None
         # self.left_action_gripper_sub = rospy.Subscriber('/left_finger_status', Int32MultiArray, lambda msg: setattr(self, 'left_action_gripper_msg', msg))
-        self.right_action_gripper_msg:Int32MultiArray = None
-        self.right_action_gripper_sub = rospy.Subscriber('/right_finger_status', Int32MultiArray, lambda msg: setattr(self, 'right_action_gripper_msg', msg))
+        self.right_action_gripper_msg:Float32MultiArray = None
+        self.right_action_gripper_sub = rospy.Subscriber('/right_finger_status', Float32MultiArray, lambda msg: setattr(self, 'right_action_gripper_msg', msg))
 
         self.is_collecting_data = False
 
@@ -222,8 +222,8 @@ class DataRecorder:
             for compressed_image in compressed_image_list:
                 padded_compressed_image = np.zeros(padded_size, dtype='uint8')
                 image_len = len(compressed_image)
-                padded_compressed_image[:image_len] = compressed_image
-                # padded_compressed_image[:image_len] = compressed_image[:,0]
+                # padded_compressed_image[:image_len] = compressed_image # two camera
+                padded_compressed_image[:image_len] = compressed_image[:,0] # three camera
                 padded_compressed_image_list.append(padded_compressed_image)
             data_dict[f'/observations/images/{cam_name}'] = padded_compressed_image_list
         print("成功保存文件到数组")

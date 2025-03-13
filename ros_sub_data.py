@@ -92,7 +92,7 @@ class DataRecorder:
             self.image_sub[cam_name] = rospy.Subscriber(cam_topic, Image, callback)
             print(f"Subscribed to {cam_name} topic: {cam_topic}")
 
-    def get_obs(self):
+    def get_obs(self): # action_dim=12
         if any(value is None for value in self.image_buffer.values()):
             print("No images received yet")
             return False
@@ -112,42 +112,88 @@ class DataRecorder:
         # joint_speeds = ret[1]  # 第二个值是关节速度列表
         
         # 获取手指状态
-        finger_status = self.modbus_client.get_finger_status()
-        print(f"Finger status: {finger_status}")
+        fingers_status = self.modbus_client.get_finger_status()
+        norm_fingers_status = [finger_status/100.0 for finger_status in fingers_status] # 将手指状态归一化到0到1之间
+        print(f"Finger status: {fingers_status}")
+        print(f"Norm Finger status: {norm_fingers_status}")
         obs={}
         encode_param = [int(cv2.IMWRITE_JPEG_QUALITY), 50]
         try:
             # obs['qpos'] = list(self.joint_msg.position[:6]) + list(self.right_action_gripper_msg.data[:6])
-            obs['qpos'] = list(joint_positions[:6]) + list(finger_status[:6])
+            obs['qpos'] = list(joint_positions[:6]) + list(norm_fingers_status[:6])
             # try:
             #     obs['qvel'] = list(self.joint_msg.position[:6]) + list([0]*6) # TODO gripper实际速度值;
             #     obs['qvel'] = list(joint_speeds[:6]) + list([0]*6) # TODO gripper实际速度值;
             # except Exception as e:
             #     obs['qvel'] = []
             obs['images'] ={}
-            obs['img_all']={}
+            # obs['img_all']={}
             
             # 拼接所有self.image_buffer内的图片到all_img
-            all_img = None
-            all_stamp = []
+            # all_img = None
+            # all_stamp = []
             for cam_name in self.image_topics.keys():
                 if self.image_buffer[cam_name][0].shape != self.image_shape:
                     raise Exception(f"image shape { self.image_buffer[cam_name][0].shape} error , require {self.image_shape} ")
                 obs['images'][cam_name] = self.image_buffer[cam_name][0]
-                if all_img is None:
-                    # 如果all_img还没有任何图像，直接使用第一个图像
-                    all_img = self.image_buffer[cam_name][0]
-                    all_stamp.append(self.image_buffer[cam_name][1])
-                else:
-                    # 水平拼接图像
-                    all_img = np.hstack((all_img, self.image_buffer[cam_name][0]))
-                    all_stamp.append(self.image_buffer[cam_name][1])
-            obs['img_all']= all_img
+            #     if all_img is None:
+            #         # 如果all_img还没有任何图像，直接使用第一个图像
+            #         all_img = self.image_buffer[cam_name][0]
+            #         all_stamp.append(self.image_buffer[cam_name][1])
+            #     else:
+            #         # 水平拼接图像
+            #         all_img = np.hstack((all_img, self.image_buffer[cam_name][0]))
+            #         all_stamp.append(self.image_buffer[cam_name][1])
+            # obs['img_all']= all_img
         except Exception as e:
             print(e)
         return obs
     
-    def get_obs_no_finger(self):
+    def get_obs_arm_gripper(self): # action_dim=7
+        if any(value is None for value in self.image_buffer.values()):
+            print("No images received yet")
+            return False
+        # 获取当前关节位置（弧度）
+        ret = self.robot.GetActualJointPosRadian()
+        if ret[0] != 0:
+            rospy.logwarn(f"Error retrieving joint positions: {ret[0]}")
+            return False
+        joint_positions = ret[1]  # 第二个值是关节位置列表
+        print(f"Joint positions: {joint_positions}")
+
+        # # 获取关节反馈速度（度/秒）
+        # ret = self.robot.GetActualJointSpeedsDegree()
+        # if ret[0] != 0:
+        #     rospy.logwarn(f"Error retrieving joint speeds: {ret[0]}")
+        #     return
+        # joint_speeds = ret[1]  # 第二个值是关节速度列表
+        
+        # 获取手指状态
+        fingers_status = self.modbus_client.get_finger_status()
+        norm_fingers_status = [finger_status/100.0 for finger_status in fingers_status] # 将手指状态归一化到0到1之间
+        print(f"Finger status: {fingers_status}")
+        print(f"Norm Finger status: {norm_fingers_status}")
+        obs={}
+        encode_param = [int(cv2.IMWRITE_JPEG_QUALITY), 50]
+        try:
+            # obs['qpos'] = list(self.joint_msg.position[:6]) + list(self.right_action_gripper_msg.data[:6])
+            obs['qpos'] = list(joint_positions[:6]) + list(norm_fingers_status[:1])
+            # try:
+            #     obs['qvel'] = list(self.joint_msg.position[:6]) + list([0]*6) # TODO gripper实际速度值;
+            #     obs['qvel'] = list(joint_speeds[:6]) + list([0]*6) # TODO gripper实际速度值;
+            # except Exception as e:
+            #     obs['qvel'] = []
+            obs['images'] ={}
+            
+            for cam_name in self.image_topics.keys():
+                if self.image_buffer[cam_name][0].shape != self.image_shape:
+                    raise Exception(f"image shape { self.image_buffer[cam_name][0].shape} error , require {self.image_shape} ")
+                obs['images'][cam_name] = self.image_buffer[cam_name][0]
+        except Exception as e:
+            print(e)
+        return obs
+    
+    def get_obs_arm(self): # action_dim=6
         if any(value is None for value in self.image_buffer.values()):
             print("No images received yet")
             return False
@@ -186,10 +232,46 @@ class DataRecorder:
             print(e)
         return obs
 
+    def get_obs_hand(self): # action_dim=6
+        if any(value is None for value in self.image_buffer.values()):
+            print("No images received yet")
+            return False
+        # 获取手指状态
+        fingers_status = self.modbus_client.get_finger_status()
+        norm_fingers_status = [finger_status/100.0 for finger_status in fingers_status] # 将手指状态归一化到0到1之间
+        print(f"Finger status: {fingers_status}")
+        print(f"Norm Finger status: {norm_fingers_status}")
+        obs={}
+        encode_param = [int(cv2.IMWRITE_JPEG_QUALITY), 50]
+        try:
+            # obs['qpos'] = list(self.joint_msg.position[:6]) + list(self.right_action_gripper_msg.data[:6])
+            obs['qpos'] = list(norm_fingers_status[:6])
+            # try:
+            #     obs['qvel'] = list(self.joint_msg.position[:6]) + list([0]*6) # TODO gripper实际速度值;
+            #     obs['qvel'] = list(joint_speeds[:6]) + list([0]*6) # TODO gripper实际速度值;
+            # except Exception as e:
+            #     obs['qvel'] = []
+            obs['images'] ={}
+            
+            for cam_name in self.image_topics.keys():
+                if self.image_buffer[cam_name][0].shape != self.image_shape:
+                    raise Exception(f"image shape { self.image_buffer[cam_name][0].shape} error , require {self.image_shape} ")
+                obs['images'][cam_name] = self.image_buffer[cam_name][0]
+        except Exception as e:
+            print(e)
+        return obs
     
-    def control_gripper(self, action_list):
-        int_action_list = [int(i) for i in action_list]
+    
+
+    def control_finger(self, action_list):
+        int_action_list = [int(i * 100) if 0 <= i <= 100 else 0 for i in action_list] # 手指动作恢复到原来的比例
         self.modbus_client.set_finger_status(int_action_list)
+        
+    def control_gripper(self, action):
+        if action < 0.1: # 如果动作小于0.1，则open
+            self.modbus_client.set_finger_status([0, 0, 0, 0, 0, 0])
+        else: # 否则，close
+            self.modbus_client.set_finger_status([50, 50, 60, 60, 70, 70])
     
     def control_arm(self, target_qpos):
         # 将每个弧度值转换为角度值
@@ -201,14 +283,21 @@ class DataRecorder:
     
     def control_arm_finger(self, action_list):
         self.control_arm(action_list[:6])
-        self.control_gripper(action_list[6:])
+        self.control_finger(action_list[6:])
+        return
+    
+    def control_arm_gripper(self, action_list):
+        self.control_arm(action_list[:6])
+        # self.control_gripper(action_list[6:])
+        self.control_gripper(action_list[6:7])
         return
     
 if __name__ == '__main__':
     rospy.init_node('data_recorder')
     camera_name_topic_dict = {'cam_high':"/cam_high/color/image_raw",
                             # 'cam_left':"/cam_left/color/image_raw",
-                            'cam_right':"/cam_right/color/image_raw"}
+                            # 'cam_right':"/cam_right/color/image_raw"
+                            }
     recorder = DataRecorder(camera_name_topic_dict)
     while True:
         recorder.get_obs()

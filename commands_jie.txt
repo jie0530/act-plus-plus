@@ -23,3 +23,11 @@ python3 imitate_episodes.py \
 
 
 python3 ros_action_capture_record.py
+
+python3 eval_arm_hand2.py \
+--task_name aloha_mobile_pick_fruit5 \
+--ckpt_dir trainings_arm_hand \
+--policy_class ACT \--kl_weight 10 --chunk_size 25 \
+--hidden_dim 512 --batch_size 8 \--dim_feedforward 3200  
+--lr 1e-5 \--seed 0 --num_steps 5000 -
+-temporal_agg --eval
