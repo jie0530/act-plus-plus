@@ -51,6 +51,9 @@ def get_args_parser():
     # * Segmentation
     parser.add_argument('--masks', action='store_true',
                         help="Train segmentation head if the flag is provided")
+    
+    # * Point Cloud
+    parser.add_argument('--use_pcd', action='store_true', help='not use point cloud')
 
     # repeat args in imitate_episodes just to avoid error. Will not be used
     parser.add_argument('--eval', action='store_true')

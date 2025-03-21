@@ -51,7 +51,10 @@ def load_hdf5(dataset_dir, dataset_name):
         pcd_data_dict = dict()
         if '/observations/pointcloud' in root:
             for cam_name in root[f'/observations/pointcloud/'].keys():
-                pcd_data_dict[cam_name] = root[f'/observations/pointcloud/{cam_name}'][()]
+                pcd_data_dict[cam_name] = dict()
+                pcd_data_dict[cam_name]['xyz'] = root[f'/observations/pointcloud/{cam_name}/xyz'][()]
+                pcd_data_dict[cam_name]['rgb'] = root[f'/observations/pointcloud/{cam_name}/rgb'][()]
+                pcd_data_dict[cam_name]['padding_mask'] = root[f'/observations/pointcloud/{cam_name}/padding_mask'][()]
         else:
             print("Warning: No point cloud data found in dataset")
             
@@ -148,20 +151,19 @@ def main(args):
 
 def decompress_pointcloud(pcd_data):
     decompressed_pcd = {}
-    for k, v in pcd_data.items():
-        xyz = v['xyz']
-        rgb = v['rgb']
-        mask = v['padding_mask']
-        decompressed_xyz = [xyz[i][mask[i]] for i in range(len(xyz))]
-        decompressed_rgb = [rgb[i][mask[i]] for i in range(len(rgb))]
-        decompressed_pcd[k] = {'xyz': decompressed_xyz, 'rgb': decompressed_rgb}
+    xyz = pcd_data['xyz']
+    rgb = pcd_data['rgb']
+    mask = pcd_data['padding_mask']
+    decompressed_xyz = [xyz[i][mask[i]] for i in range(len(xyz))]
+    decompressed_rgb = [rgb[i][mask[i]] for i in range(len(rgb))]
+    decompressed_pcd = {'xyz': decompressed_xyz, 'rgb': decompressed_rgb}
     return decompressed_pcd
 
 def save_pointcloud_video(pcd_data, video_path, fps=30):
     fourcc = cv2.VideoWriter_fourcc(*'mp4v')
     out = cv2.VideoWriter(video_path, fourcc, fps, (640, 480))  # Adjust resolution as needed
-
-    for i in range(len(pcd_data['xyz'])):
+    # TODO: 下采样
+    for i in range(10): # len(pcd_data['xyz'])
         xyz = pcd_data['xyz'][i]
         rgb = pcd_data['rgb'][i]
         img = np.zeros((480, 640, 3), dtype=np.uint8)  # Create a blank image

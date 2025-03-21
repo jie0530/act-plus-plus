@@ -269,29 +269,6 @@ def eval_bc(config, ckpt_name, save_episode=True, num_rollouts=50):
     stats_path = os.path.join(ckpt_dir, f'dataset_stats.pkl')
     with open(stats_path, 'rb') as f:
         stats = pickle.load(f)
-    # if use_actuator_net:
-    #     prediction_len = actuator_config['prediction_len']
-    #     future_len = actuator_config['future_len']
-    #     history_len = actuator_config['history_len']
-    #     actuator_network_dir = actuator_config['actuator_network_dir']
-
-    #     from act.train_actuator_network import ActuatorNetwork
-    #     actuator_network = ActuatorNetwork(prediction_len)
-    #     actuator_network_path = os.path.join(actuator_network_dir, 'actuator_net_last.ckpt')
-    #     loading_status = actuator_network.load_state_dict(torch.load(actuator_network_path))
-    #     actuator_network.eval()
-    #     actuator_network.cuda()
-    #     print(f'Loaded actuator network from: {actuator_network_path}, {loading_status}')
-
-    #     actuator_stats_path  = os.path.join(actuator_network_dir, 'actuator_net_stats.pkl')
-    #     with open(actuator_stats_path, 'rb') as f:
-    #         actuator_stats = pickle.load(f)
-        
-    #     actuator_unnorm = lambda x: x * actuator_stats['commanded_speed_std'] + actuator_stats['commanded_speed_std']
-    #     actuator_norm = lambda x: (x - actuator_stats['observed_speed_mean']) / actuator_stats['observed_speed_mean']
-    #     def collect_base_action(all_actions, norm_episode_all_base_actions):
-    #         post_processed_actions = post_process(all_actions.squeeze(0).cpu().numpy())
-    #         norm_episode_all_base_actions += actuator_norm(post_processed_actions[:, -2:]).tolist()
 
     pre_process = lambda s_qpos: (s_qpos - stats['qpos_mean']) / stats['qpos_std']
     if policy_class == 'Diffusion':
@@ -308,21 +285,12 @@ def eval_bc(config, ckpt_name, save_episode=True, num_rollouts=50):
 
     ### evaluation loop
     if temporal_agg:
-        # all_time_actions = torch.zeros([max_timesteps, max_timesteps+num_queries, 16]).cuda() #org
         all_time_actions = torch.zeros([max_timesteps, max_timesteps+num_queries, state_dim]).cuda()
 
-    # qpos_history = torch.zeros((1, max_timesteps, state_dim)).cuda()
     qpos_history_raw = np.zeros((max_timesteps, state_dim))
     image_list = [] # for visualization
-    # if use_actuator_net:
-    #     norm_episode_all_base_actions = [actuator_norm(np.zeros(history_len, 2)).tolist()]
     
     #初始化订阅观测类，订阅joints, hand, images
-    # print(f"camera_name : {camera_names}")
-    # sub_data = DataRecorder(camera_names)
-    # camera_name_topic_dict = {'cam_high':"/cam_high/color/image_raw",
-    #                         # 'cam_left':"/cam_left/color/image_raw",
-    #                         'cam_right':"/cam_right/color/image_raw"}
     sub_data = DataRecorder(camera_names)
     while True:
         obs = sub_data.get_obs_arm_gripper()
@@ -343,8 +311,6 @@ def eval_bc(config, ckpt_name, save_episode=True, num_rollouts=50):
             qpos_history_raw[t] = qpos_numpy
             qpos = pre_process(qpos_numpy)
             qpos = torch.from_numpy(qpos).float().cuda().unsqueeze(0)
-            # qpos_history[:, t] = qpos
-            # curr_image = obs['img_all']
             curr_image = get_image(obs, camera_names, rand_crop_resize=(config['policy_class'] == 'Diffusion'))
 
             if t == 0:
@@ -363,7 +329,6 @@ def eval_bc(config, ckpt_name, save_episode=True, num_rollouts=50):
                     #     collect_base_action(all_actions, norm_episode_all_base_actions)
                 if temporal_agg:
                     print(f"t: {t}")
-                    # print(f"all_actions: {all_actions}")
                     all_time_actions[[t], t:t+num_queries] = all_actions
                     actions_for_curr_step = all_time_actions[:, t]
                     actions_populated = torch.all(actions_for_curr_step != 0, axis=1)
@@ -375,9 +340,6 @@ def eval_bc(config, ckpt_name, save_episode=True, num_rollouts=50):
                     raw_action = (actions_for_curr_step * exp_weights).sum(dim=0, keepdim=True)
                 else:
                     raw_action = all_actions[:, t % query_frequency]
-                    # if t % query_frequency == query_frequency - 1:
-                    #     # zero out base actions to avoid overshooting
-                    #     raw_action[0, -2:] = 0
             elif config['policy_class'] == "Diffusion":
                 if t % query_frequency == 0:
                     all_actions = policy(qpos, curr_image)
@@ -387,28 +349,14 @@ def eval_bc(config, ckpt_name, save_episode=True, num_rollouts=50):
             elif config['policy_class'] == "CNNMLP":
                 raw_action = policy(qpos, curr_image)
                 all_actions = raw_action.unsqueeze(0)
-                # if use_actuator_net:
-                #     collect_base_action(all_actions, norm_episode_all_base_actions)
             else:
                 raise NotImplementedError
-            # print('query policy: ', time.time() - time3)
 
             ### post-process actions
             time4 = time.time()
             raw_action = raw_action.squeeze(0).cpu().numpy()
             action = post_process(raw_action)
             print(f"action: {action}")
-
-            # if use_actuator_net:
-            #     assert(not temporal_agg)
-            #     if t % prediction_len == 0:
-            #         offset_start_ts = t + history_len
-            #         actuator_net_in = np.array(norm_episode_all_base_actions[offset_start_ts - history_len: offset_start_ts + future_len])
-            #         actuator_net_in = torch.from_numpy(actuator_net_in).float().unsqueeze(dim=0).cuda()
-            #         pred = actuator_network(actuator_net_in)
-            #         base_action_chunk = actuator_unnorm(pred.detach().cpu().numpy()[0])
-            #     base_action = base_action_chunk[t % prediction_len]
-            # else:
 
             ### step the environment
             sub_data.control_arm_gripper(action)

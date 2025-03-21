@@ -23,6 +23,7 @@ from visualize_episodes import save_videos
 from detr.models.latent_model import Latent_Model_Transformer
 from ros_sub_data_all import DataRecorder
 import rospy
+import h5py
 
 # from sim_env import BOX_POSE
 
@@ -65,13 +66,14 @@ def main(args):
     # num_episodes = task_config['num_episodes']
     episode_len = task_config['episode_len']
     camera_names = task_config['camera_names']
+    depth_camera_names = task_config['depth_camera_names']
     stats_dir = task_config.get('stats_dir', None)
     sample_weights = task_config.get('sample_weights', None)
     train_ratio = task_config.get('train_ratio', 0.99)
     name_filter = task_config.get('name_filter', lambda n: True)
 
     # fixed parameters
-    state_dim = 6
+    state_dim = 7
     lr_backbone = 1e-5
     backbone = 'resnet18'
     if policy_class == 'ACT':
@@ -89,17 +91,18 @@ def main(args):
                          'dec_layers': dec_layers,
                          'nheads': nheads,
                          'camera_names': camera_names,
+                         'depth_camera_names': depth_camera_names,
                          'vq': args['use_vq'],
                          'vq_class': args['vq_class'],
                          'vq_dim': args['vq_dim'],
-                         'action_dim': 6,#org:16
+                         'action_dim': 7,#org:16
                          'no_encoder': args['no_encoder'],
                          }
     elif policy_class == 'Diffusion':
 
         policy_config = {'lr': args['lr'],
                          'camera_names': camera_names,
-                         'action_dim': 6,
+                         'action_dim': 7,
                          'observation_horizon': 1,
                          'action_horizon': 8,
                          'prediction_horizon': args['chunk_size'],
@@ -138,6 +141,7 @@ def main(args):
         'seed': args['seed'],
         'temporal_agg': args['temporal_agg'],
         'camera_names': camera_names,
+        'depth_camera_names': depth_camera_names,
         'real_robot': not is_sim,
         'load_pretrain': args['load_pretrain'],#act没有用到
         'actuator_config': actuator_config,#act没有用到
@@ -225,6 +229,17 @@ def get_image(obs, camera_names, rand_crop_resize=False):
     return curr_image
 
 
+def get_pointcloud(obs):
+    # 检查是否存在点云数据
+    if 'pointcloud' not in obs:
+        return None
+    
+    pointcloud_data = {
+        'xyz': torch.from_numpy(obs['pointcloud']['xyz']).float().cuda(),
+        'rgb': torch.from_numpy(obs['pointcloud']['rgb']).float().cuda()
+    }
+    return pointcloud_data
+
 def eval_bc(config, ckpt_name, save_episode=True, num_rollouts=50):
     set_seed(1000)
     ckpt_dir = config['ckpt_dir']
@@ -234,6 +249,7 @@ def eval_bc(config, ckpt_name, save_episode=True, num_rollouts=50):
     onscreen_render = config['onscreen_render']
     policy_config = config['policy_config']
     camera_names = config['camera_names']
+    depth_camera_names = config['depth_camera_names']
     max_timesteps = config['episode_len']
     task_name = config['task_name']
     temporal_agg = config['temporal_agg']
@@ -242,6 +258,10 @@ def eval_bc(config, ckpt_name, save_episode=True, num_rollouts=50):
     vq = config['policy_config']['vq']
     actuator_config = config['actuator_config']
     use_actuator_net = actuator_config['actuator_network_dir'] is not None
+
+    # To store the actions
+    inference_actions = []
+    ground_truth_actions = []  # Assuming ground truth actions are available or can be extracted
 
     # load policy and stats
     ckpt_path = os.path.join(ckpt_dir, ckpt_name)
@@ -264,29 +284,6 @@ def eval_bc(config, ckpt_name, save_episode=True, num_rollouts=50):
     stats_path = os.path.join(ckpt_dir, f'dataset_stats.pkl')
     with open(stats_path, 'rb') as f:
         stats = pickle.load(f)
-    # if use_actuator_net:
-    #     prediction_len = actuator_config['prediction_len']
-    #     future_len = actuator_config['future_len']
-    #     history_len = actuator_config['history_len']
-    #     actuator_network_dir = actuator_config['actuator_network_dir']
-
-    #     from act.train_actuator_network import ActuatorNetwork
-    #     actuator_network = ActuatorNetwork(prediction_len)
-    #     actuator_network_path = os.path.join(actuator_network_dir, 'actuator_net_last.ckpt')
-    #     loading_status = actuator_network.load_state_dict(torch.load(actuator_network_path))
-    #     actuator_network.eval()
-    #     actuator_network.cuda()
-    #     print(f'Loaded actuator network from: {actuator_network_path}, {loading_status}')
-
-    #     actuator_stats_path  = os.path.join(actuator_network_dir, 'actuator_net_stats.pkl')
-    #     with open(actuator_stats_path, 'rb') as f:
-    #         actuator_stats = pickle.load(f)
-        
-    #     actuator_unnorm = lambda x: x * actuator_stats['commanded_speed_std'] + actuator_stats['commanded_speed_std']
-    #     actuator_norm = lambda x: (x - actuator_stats['observed_speed_mean']) / actuator_stats['observed_speed_mean']
-    #     def collect_base_action(all_actions, norm_episode_all_base_actions):
-    #         post_processed_actions = post_process(all_actions.squeeze(0).cpu().numpy())
-    #         norm_episode_all_base_actions += actuator_norm(post_processed_actions[:, -2:]).tolist()
 
     pre_process = lambda s_qpos: (s_qpos - stats['qpos_mean']) / stats['qpos_std']
     if policy_class == 'Diffusion':
@@ -303,24 +300,15 @@ def eval_bc(config, ckpt_name, save_episode=True, num_rollouts=50):
 
     ### evaluation loop
     if temporal_agg:
-        # all_time_actions = torch.zeros([max_timesteps, max_timesteps+num_queries, 16]).cuda() #org
         all_time_actions = torch.zeros([max_timesteps, max_timesteps+num_queries, state_dim]).cuda()
 
-    # qpos_history = torch.zeros((1, max_timesteps, state_dim)).cuda()
     qpos_history_raw = np.zeros((max_timesteps, state_dim))
     image_list = [] # for visualization
-    # if use_actuator_net:
-    #     norm_episode_all_base_actions = [actuator_norm(np.zeros(history_len, 2)).tolist()]
     
     #初始化订阅观测类，订阅joints, hand, images
-    # print(f"camera_name : {camera_names}")
-    # sub_data = DataRecorder(camera_names)
-    # camera_name_topic_dict = {'cam_high':"/cam_high/color/image_raw",
-    #                         # 'cam_left':"/cam_left/color/image_raw",
-    #                         'cam_right':"/cam_right/color/image_raw"}
-    sub_data = DataRecorder(camera_names)
+    sub_data = DataRecorder(camera_names, depth_camera_names)
     while True:
-        obs = sub_data.get_obs_no_finger()
+        obs = sub_data.get_obs_arm_gripper()
         if obs is False:
             rospy.sleep(0.1)
             continue
@@ -333,19 +321,19 @@ def eval_bc(config, ckpt_name, save_episode=True, num_rollouts=50):
 
             ### process previous timestep to get qpos and image_list
             time2 = time.time()
-            obs = sub_data.get_obs_no_finger()
+            obs = sub_data.get_obs_arm_gripper()
             qpos_numpy = np.array(obs['qpos'])
             qpos_history_raw[t] = qpos_numpy
             qpos = pre_process(qpos_numpy)
             qpos = torch.from_numpy(qpos).float().cuda().unsqueeze(0)
-            # qpos_history[:, t] = qpos
-            # curr_image = obs['img_all']
             curr_image = get_image(obs, camera_names, rand_crop_resize=(config['policy_class'] == 'Diffusion'))
+            # 获取点云数据
+            pointcloud = get_pointcloud(obs)
 
             if t == 0:
                 # warm up
                 for _ in range(10):
-                    policy(qpos, curr_image)
+                    policy(qpos, curr_image, pointcloud=pointcloud)
                 print('network warm up done')
                 time1 = time.time()
 
@@ -353,12 +341,9 @@ def eval_bc(config, ckpt_name, save_episode=True, num_rollouts=50):
             time3 = time.time()
             if config['policy_class'] == "ACT":
                 if t % query_frequency == 0:
-                    all_actions = policy(qpos, curr_image)
-                    # if use_actuator_net:
-                    #     collect_base_action(all_actions, norm_episode_all_base_actions)
+                    all_actions = policy(qpos, curr_image, pointcloud=pointcloud)
                 if temporal_agg:
                     print(f"t: {t}")
-                    # print(f"all_actions: {all_actions}")
                     all_time_actions[[t], t:t+num_queries] = all_actions
                     actions_for_curr_step = all_time_actions[:, t]
                     actions_populated = torch.all(actions_for_curr_step != 0, axis=1)
@@ -370,23 +355,15 @@ def eval_bc(config, ckpt_name, save_episode=True, num_rollouts=50):
                     raw_action = (actions_for_curr_step * exp_weights).sum(dim=0, keepdim=True)
                 else:
                     raw_action = all_actions[:, t % query_frequency]
-                    # if t % query_frequency == query_frequency - 1:
-                    #     # zero out base actions to avoid overshooting
-                    #     raw_action[0, -2:] = 0
             elif config['policy_class'] == "Diffusion":
                 if t % query_frequency == 0:
-                    all_actions = policy(qpos, curr_image)
-                    # if use_actuator_net:
-                    #     collect_base_action(all_actions, norm_episode_all_base_actions)
+                    all_actions = policy(qpos, curr_image, pointcloud=pointcloud)
                 raw_action = all_actions[:, t % query_frequency]
             elif config['policy_class'] == "CNNMLP":
-                raw_action = policy(qpos, curr_image)
+                raw_action = policy(qpos, curr_image, pointcloud=pointcloud)
                 all_actions = raw_action.unsqueeze(0)
-                # if use_actuator_net:
-                #     collect_base_action(all_actions, norm_episode_all_base_actions)
             else:
                 raise NotImplementedError
-            # print('query policy: ', time.time() - time3)
 
             ### post-process actions
             time4 = time.time()
@@ -394,21 +371,51 @@ def eval_bc(config, ckpt_name, save_episode=True, num_rollouts=50):
             action = post_process(raw_action)
             print(f"action: {action}")
 
-            # if use_actuator_net:
-            #     assert(not temporal_agg)
-            #     if t % prediction_len == 0:
-            #         offset_start_ts = t + history_len
-            #         actuator_net_in = np.array(norm_episode_all_base_actions[offset_start_ts - history_len: offset_start_ts + future_len])
-            #         actuator_net_in = torch.from_numpy(actuator_net_in).float().unsqueeze(dim=0).cuda()
-            #         pred = actuator_network(actuator_net_in)
-            #         base_action_chunk = actuator_unnorm(pred.detach().cpu().numpy()[0])
-            #     base_action = base_action_chunk[t % prediction_len]
-            # else:
-
             ### step the environment
-            # sub_data.control_arm(action)
-            sub_data.control_gripper(action)
+            sub_data.control_arm_gripper(action)
             rospy.sleep(0.1)
+            inference_actions.append(action)
+            
+        # After the inference loop in eval_bc
+        dataset_path = '/home/wsco/jie_ws/src/act-plus-plus/aloha_scripts/data/'+ task_name + '/episode_0.hdf5'
+        with h5py.File(dataset_path, 'r') as root:
+            ground_truth_actions = root['/action'][:, :7]
+        visualize_actions(inference_actions, ground_truth_actions, 7)
+
+def visualize_actions(inference_actions, ground_truth_actions, rows_per_plot=3):
+    # Convert lists to numpy arrays for easier plotting
+    inference_actions = np.array(inference_actions)
+    ground_truth_actions = np.array(ground_truth_actions)
+    
+    # Assuming both inference and ground truth actions have the same dimensions
+    num_timesteps = inference_actions.shape[0]
+    num_joints = inference_actions.shape[1]
+    
+    # Calculate the number of plots needed
+    num_plots = (num_joints + rows_per_plot - 1) // rows_per_plot  # Ceiling division
+    
+    # Plot comparison for each joint or action
+    for plot_idx in range(num_plots):
+        start_idx = plot_idx * rows_per_plot
+        end_idx = min((plot_idx + 1) * rows_per_plot, num_joints)
+        num_rows = end_idx - start_idx
+        
+        fig, axs = plt.subplots(num_rows, 1, figsize=(10, 5 * num_rows))
+        
+        for i in range(num_rows):
+            joint_idx = start_idx + i
+            axs[i].plot(range(num_timesteps), inference_actions[:, joint_idx], label='Inference Action')
+            axs[i].plot(range(num_timesteps), ground_truth_actions[:, joint_idx], label='Ground Truth Action', linestyle='dashed')
+            axs[i].set_title(f'Action Comparison for Joint {joint_idx}')
+            axs[i].set_xlabel('Time Step')
+            axs[i].set_ylabel('Action Value')
+            axs[i].legend()
+        
+        plt.tight_layout()
+        plt.savefig(f"action_comparison_part{plot_idx + 1}.png")
+        print(f'Saved action comparison plot to: action_comparison_part{plot_idx + 1}.png')
+        plt.close()
+
 
 def forward_pass(data, policy):
     image_data, qpos_data, action_data, is_pad = data

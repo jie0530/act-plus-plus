@@ -4,16 +4,26 @@ import os
 
 DATA_DIR = os.path.join('/'.join(__file__.split('/')[:-2]),'data')
 TASK_CONFIGS = { 
-    'aloha_pick_fruit7':{
-        'dataset_dir': DATA_DIR + '/aloha_pick_fruit7',
+    'aloha_pick_fruit9':{
+        'dataset_dir': DATA_DIR + '/aloha_pick_fruit9',
         'train_ratio': 0.92,
-        'episode_len': 160,
+        'episode_len': 100,
         # 'camera_names': ['cam_high', 'cam_left', 'cam_right']
         'camera_names': {
                         'cam_high':"/cam_high/color/image_raw",
                         'cam_left':"/cam_left/color/image_raw",
                         'cam_right':"/cam_right/color/image_raw"
-                        }
+                        },
+        'depth_camera_names': {
+            'cam_high':"/cam_high/aligned_depth_to_color/image_raw",
+            'cam_left':"/cam_left/aligned_depth_to_color/image_raw",
+            'cam_right':"/cam_right/aligned_depth_to_color/image_raw"
+        },
+        'pointcloud_names': {
+            'cam_high':"/cam_high/depth/color/points",
+            'cam_left':"/cam_left/depth/color/points",
+            'cam_right':"/cam_right/depth/color/points"
+        },
     },
     # elevator
     'aloha_mobile_elevator':{

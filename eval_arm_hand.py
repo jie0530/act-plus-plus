@@ -21,7 +21,7 @@ from policy import ACTPolicy, CNNMLPPolicy, DiffusionPolicy
 from visualize_episodes import save_videos
 
 from detr.models.latent_model import Latent_Model_Transformer
-from ros_sub_data import DataRecorder
+from ros_sub_data_all import DataRecorder
 import rospy
 import h5py
 

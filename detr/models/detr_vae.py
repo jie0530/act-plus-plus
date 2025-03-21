@@ -8,6 +8,7 @@ from torch.autograd import Variable
 import torch.nn.functional as F
 from .backbone import build_backbone
 from .transformer import build_transformer, TransformerEncoder, TransformerEncoderLayer
+from .pointnet import PointNet
 
 import numpy as np
 
@@ -34,7 +35,7 @@ def get_sinusoid_encoding_table(n_position, d_hid):
 
 class DETRVAE(nn.Module):
     """ This is the DETR module that performs object detection """
-    def __init__(self, backbones, transformer, encoder, state_dim, num_queries, camera_names, vq, vq_class, vq_dim, action_dim):
+    def __init__(self, backbones, transformer, encoder, state_dim, num_queries, camera_names, vq, vq_class, vq_dim, action_dim, pcl_backbone):
         """ Initializes the model.
         Parameters:
             backbones: torch module of the backbone to be used. See backbone.py
@@ -43,6 +44,7 @@ class DETRVAE(nn.Module):
             num_queries: number of object queries, ie detection slot. This is the maximal number of objects
                          DETR can detect in a single image. For COCO, we recommend 100 queries.
             aux_loss: True if auxiliary decoding losses (loss at each decoder layer) are to be used.
+            pointnet_dim: dimension of point cloud features from PointNet
         """
         super().__init__()
         self.num_queries = num_queries
@@ -59,6 +61,8 @@ class DETRVAE(nn.Module):
             self.input_proj = nn.Conv2d(backbones[0].num_channels, hidden_dim, kernel_size=1)
             self.backbones = nn.ModuleList(backbones)
             self.input_proj_robot_state = nn.Linear(state_dim, hidden_dim)
+            if pcl_backbone is not None:
+                self.input_proj_pointnet = nn.Linear(pcl_backbone.output_dim, hidden_dim)
         else:
             # input_dim = 14 + 7 # robot_state + env_state
             self.input_proj_robot_state = nn.Linear(state_dim, hidden_dim)
@@ -87,7 +91,11 @@ class DETRVAE(nn.Module):
             self.latent_out_proj = nn.Linear(self.vq_class * self.vq_dim, hidden_dim)
         else: 
             self.latent_out_proj = nn.Linear(self.latent_dim, hidden_dim) # project latent sample to embedding
-        self.additional_pos_embed = nn.Embedding(2, hidden_dim) # learned position embedding for proprio and latent
+        if pcl_backbone is not None:
+            self.pcl_backbone = pcl_backbone
+            self.additional_pos_embed = nn.Embedding(3, hidden_dim) # learned position embedding for proprio, pointnet and latent
+        else:
+            self.additional_pos_embed = nn.Embedding(2, hidden_dim) # learned position embedding for proprio and latent
 
 
     def encode(self, qpos, actions=None, is_pad=None, vq_sample=None):
@@ -146,12 +154,15 @@ class DETRVAE(nn.Module):
 
         return latent_input, probs, binaries, mu, logvar
 
-    def forward(self, qpos, image, env_state, actions=None, is_pad=None, vq_sample=None):
+    def forward(self, qpos, image, env_state, actions=None, is_pad=None, vq_sample=None, pointcloud=None):
         """
         qpos: batch, qpos_dim
         image: batch, num_cam, channel, height, width
         env_state: None
         actions: batch, seq, action_dim
+        pointcloud: dict with keys:
+            - xyz: (batch, num_points, 3) 点云坐标
+            - rgb: (batch, num_points, 3) 点云颜色
         """
         latent_input, probs, binaries, mu, logvar = self.encode(qpos, actions, is_pad, vq_sample)
 
@@ -168,10 +179,23 @@ class DETRVAE(nn.Module):
                 all_cam_pos.append(pos)
             # proprioception features
             proprio_input = self.input_proj_robot_state(qpos)
-            # fold camera dimension into width dimension
-            src = torch.cat(all_cam_features, axis=3)
-            pos = torch.cat(all_cam_pos, axis=3)
-            hs = self.transformer(src, None, self.query_embed.weight, pos, latent_input, proprio_input, self.additional_pos_embed.weight)[0]
+            # point cloud features
+            if pointcloud is not None and self.pcl_backbone is not None:
+                # 利用pointnet处理点云信息  
+                pcl_features = self.pcl_backbone(pointcloud)  # (batch, output_dim)
+                # 将点云特征投影到transformer的隐藏维度
+                pcl_input = self.input_proj_pointnet(pcl_features)  # (batch, hidden_dim)
+                # 将点云特征转换为transformer所需的序列形式
+                # pcl_input = pcl_input.unsqueeze(0)  # (1, batch, hidden_dim)
+                # fold camera dimension into width dimension
+                src = torch.cat(all_cam_features, axis=3)
+                pos = torch.cat(all_cam_pos, axis=3)
+                hs = self.transformer(src, None, self.query_embed.weight, pos, latent_input, proprio_input, self.additional_pos_embed.weight, pcl_input)[0]
+            else:
+                # fold camera dimension into width dimension
+                src = torch.cat(all_cam_features, axis=3)
+                pos = torch.cat(all_cam_pos, axis=3)
+                hs = self.transformer(src, None, self.query_embed.weight, pos, latent_input, proprio_input, self.additional_pos_embed.weight)[0]
         else:
             qpos = self.input_proj_robot_state(qpos)
             env_state = self.input_proj_env_state(env_state)
@@ -288,6 +312,18 @@ def build(args):
         # encoder = build_transformer(args)
         encoder = build_encoder(args)
         
+    # 构建 PointNet 模型
+    if args.use_pcd is False:
+        pcl_backbone = None
+    else:
+        pcl_backbone = PointNet(
+            n_coordinates=3,  # 点云坐标维度
+            n_color=3,        # 点云颜色维度（如果有的话）
+            output_dim=512,   # 输出特征维度
+            hidden_dim=512,   # 隐藏层维度
+            hidden_depth=2,   # 隐藏层深度
+        )
+        
     model = DETRVAE(
         backbones,
         transformer,
@@ -299,6 +335,7 @@ def build(args):
         vq_class=args.vq_class,
         vq_dim=args.vq_dim,
         action_dim=args.action_dim,
+        pcl_backbone=pcl_backbone
     )
 
     n_parameters = sum(p.numel() for p in model.parameters() if p.requires_grad)

@@ -4,29 +4,6 @@ import os
 
 DATA_DIR = os.path.join('/'.join(__file__.split('/')[:-2]),'data')
 TASK_CONFIGS = { 
-    'aloha_mobile_pick_fruit':{
-        # 'dataset_dir': DATA_DIR + '/aloha_mobile_pick_fruit',
-        'dataset_dir': '/home/wsco/jie_ws/src/act-plus-plus/aloha_scripts/data/aloha_mobile_pick_fruit',
-        'train_ratio': 0.92,
-        'episode_len': 500,
-        # 'camera_names': ['cam_high', 'cam_left', 'cam_right']
-        'camera_names': {
-                        'cam_high':"/cam_high/color/image_raw"
-                        # 'cam_left':"/cam_left/color/image_raw",
-                        # 'cam_right':"/cam_right/color/image_raw"
-                        }
-    },
-    'aloha_mobile_pick_fruit2':{
-        # 'dataset_dir': DATA_DIR + '/aloha_mobile_pick_fruit',
-        'dataset_dir': '/home/wsco/jie_ws/src/act-plus-plus/aloha_scripts/data/aloha_mobile_pick_fruit2',
-        'train_ratio': 0.92,
-        'episode_len': 200,
-        # 'camera_names': ['cam_high', 'cam_left', 'cam_right']
-        'camera_names': {'cam_high':"/cam_high/color/image_raw"
-                        # 'cam_left':"/cam_left/color/image_raw",
-                        # 'cam_right':"/cam_right/color/image_raw"
-                        }
-    },
     'aloha_pick_fruit7':{
         # 'dataset_dir': DATA_DIR + '/aloha_mobile_pick_fruit',
         'dataset_dir': '/home/wsco/jie_ws/src/act-plus-plus/aloha_scripts/data/aloha_pick_fruit7',
@@ -38,6 +15,46 @@ TASK_CONFIGS = {
                         'cam_left':"/cam_left/color/image_raw",
                         'cam_right':"/cam_right/color/image_raw"
                         }
+    },
+    
+    'aloha_pick_fruit8':{
+        # 'dataset_dir': DATA_DIR + '/aloha_mobile_pick_fruit',
+        'dataset_dir': '/home/wsco/jie_ws/src/act-plus-plus/aloha_scripts/data/aloha_pick_fruit8',
+        'train_ratio': 0.92,
+        'episode_len': 300,
+        # 'camera_names': ['cam_high', 'cam_left', 'cam_right']
+        'camera_names': {
+                        'cam_high':"/cam_high/color/image_raw",
+                        'cam_left':"/cam_left/color/image_raw",
+                        'cam_right':"/cam_right/color/image_raw"
+                        },
+        'depth_camera_names': {
+                        'cam_high':"/cam_high/depth/image_rect_raw",
+                        'cam_left':"/cam_left/depth/image_rect_raw",
+                        'cam_right':"/cam_right/depth/image_rect_raw"
+                        }
+    },
+    
+    'aloha_pick_fruit9':{
+        'dataset_dir': '/home/wsco/jie_ws/src/act-plus-plus/aloha_scripts/data/aloha_pick_fruit9',
+        'train_ratio': 0.92,
+        'episode_len': 100,
+        # 'camera_names': ['cam_high', 'cam_left', 'cam_right']
+        'camera_names': {
+                        'cam_high':"/cam_high/color/image_raw",
+                        'cam_left':"/cam_left/color/image_raw",
+                        'cam_right':"/cam_right/color/image_raw"
+                        },
+        'depth_camera_names': {
+            'cam_high':"/cam_high/aligned_depth_to_color/image_raw",
+            'cam_left':"/cam_left/aligned_depth_to_color/image_raw",
+            'cam_right':"/cam_right/aligned_depth_to_color/image_raw"
+        },
+        'pointcloud_names': {
+            'cam_high':"/cam_high/depth/color/points",
+            # 'cam_left':"/cam_left/depth/color/points",
+            # 'cam_right':"/cam_right/depth/color/points"
+        },
     },
     
     # elevator
