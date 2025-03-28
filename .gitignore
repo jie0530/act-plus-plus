@@ -5,6 +5,7 @@ outputs
 data
 data_local
 aloha_scripts/data
+robomimic
 trainings*
 .vscode
 _wandb

@@ -22,6 +22,8 @@ class DiffusionPolicy(nn.Module):
         super().__init__()
 
         self.camera_names = args_override['camera_names']
+        self.use_depth = args_override.get('use_depth', False)
+        self.depth_camera_names = args_override.get('depth_camera_names', self.camera_names)
 
         self.observation_horizon = args_override['observation_horizon'] ### TODO TODO TODO DO THIS
         self.action_horizon = args_override['action_horizon'] # apply chunk size
@@ -43,12 +45,28 @@ class DiffusionPolicy(nn.Module):
             backbones.append(ResNet18Conv(**{'input_channel': 3, 'pretrained': False, 'input_coord_conv': False}))
             pools.append(SpatialSoftmax(**{'input_shape': [512, 15, 20], 'num_kp': self.num_kp, 'temperature': 1.0, 'learnable_temperature': False, 'noise_std': 0.0}))
             linears.append(torch.nn.Linear(int(np.prod([self.num_kp, 2])), self.feature_dimension))
+        
+        depth_backbones = []
+        depth_pools = []
+        depth_linears = []
+        if self.use_depth:
+            for _ in self.depth_camera_names:
+                depth_backbones.append(ResNet18Conv(**{'input_channel': 1, 'pretrained': False, 'input_coord_conv': False}))
+                depth_pools.append(SpatialSoftmax(**{'input_shape': [512, 15, 20], 'num_kp': self.num_kp, 'temperature': 1.0, 'learnable_temperature': False, 'noise_std': 0.0}))
+                depth_linears.append(torch.nn.Linear(int(np.prod([self.num_kp, 2])), self.feature_dimension))
+
         backbones = nn.ModuleList(backbones)
         pools = nn.ModuleList(pools)
         linears = nn.ModuleList(linears)
         
-        backbones = replace_bn_with_gn(backbones) # TODO
-
+        if self.use_depth:
+            depth_backbones = nn.ModuleList(depth_backbones)
+            depth_pools = nn.ModuleList(depth_pools)
+            depth_linears = nn.ModuleList(depth_linears)
+        
+        backbones = replace_bn_with_gn(backbones)
+        if self.use_depth:
+            depth_backbones = replace_bn_with_gn(depth_backbones)
 
         noise_pred_net = ConditionalUnet1D(
             input_dim=self.ac_dim,
@@ -63,6 +81,13 @@ class DiffusionPolicy(nn.Module):
                 'noise_pred_net': noise_pred_net
             })
         })
+
+        if self.use_depth:
+            nets['policy'].update({
+                'depth_backbones': depth_backbones,
+                'depth_pools': depth_pools,
+                'depth_linears': depth_linears
+            })
 
         nets = nets.float().cuda()
         ENABLE_EMA = True
@@ -92,11 +117,12 @@ class DiffusionPolicy(nn.Module):
         return optimizer
 
 
-    def __call__(self, qpos, image, actions=None, is_pad=None):
+    def __call__(self, qpos, image, actions=None, is_pad=None, depth_img=None):
         B = qpos.shape[0]
-        if actions is not None: # training time
+        if actions is not None:  # training time
             nets = self.nets
             all_features = []
+            
             for cam_id in range(len(self.camera_names)):
                 cam_image = image[:, cam_id]
                 cam_features = nets['policy']['backbones'][cam_id](cam_image)
@@ -104,6 +130,15 @@ class DiffusionPolicy(nn.Module):
                 pool_features = torch.flatten(pool_features, start_dim=1)
                 out_features = nets['policy']['linears'][cam_id](pool_features)
                 all_features.append(out_features)
+
+            if self.use_depth and depth_img is not None:
+                for cam_id in range(len(self.depth_camera_names)):
+                    depth_image = depth_img[:, cam_id].unsqueeze(1)  # 添加通道维度
+                    depth_features = nets['policy']['depth_backbones'][cam_id](depth_image)
+                    depth_pool_features = nets['policy']['depth_pools'][cam_id](depth_features)
+                    depth_pool_features = torch.flatten(depth_pool_features, start_dim=1)
+                    depth_out_features = nets['policy']['depth_linears'][cam_id](depth_pool_features)
+                    all_features.append(depth_out_features)
 
             obs_cond = torch.cat(all_features + [qpos], dim=1)
 
@@ -154,6 +189,15 @@ class DiffusionPolicy(nn.Module):
                 out_features = nets['policy']['linears'][cam_id](pool_features)
                 all_features.append(out_features)
 
+            if self.use_depth and depth_img is not None:
+                for cam_id in range(len(self.depth_camera_names)):
+                    depth_image = depth_img[:, cam_id].unsqueeze(1)  # 添加通道维度
+                    depth_features = nets['policy']['depth_backbones'][cam_id](depth_image)
+                    depth_pool_features = nets['policy']['depth_pools'][cam_id](depth_features)
+                    depth_pool_features = torch.flatten(depth_pool_features, start_dim=1)
+                    depth_out_features = nets['policy']['depth_linears'][cam_id](depth_pool_features)
+                    all_features.append(depth_out_features)
+
             obs_cond = torch.cat(all_features + [qpos], dim=1)
 
             # initialize action from Guassian noise
@@ -199,43 +243,92 @@ class DiffusionPolicy(nn.Module):
 class ACTPolicy(nn.Module):
     def __init__(self, args_override):
         super().__init__()
+        # 构建模型时传入深度图相关参数
+        self.use_depth = args_override.get('use_depth', False)
+        self.use_pcd = args_override.get('use_pcd', False)
+        self.depth_camera_names = args_override.get('depth_camera_names', args_override['depth_camera_names'])
+        
         model, optimizer = build_ACT_model_and_optimizer(args_override)
         self.model = model # CVAE decoder
         self.optimizer = optimizer
         self.kl_weight = args_override['kl_weight']
         self.vq = args_override['vq']
         print(f'KL Weight {self.kl_weight}')
+        print(f'Use Depth: {self.use_depth}')
 
     # __call__ 方法被重写，用于处理输入数据，并自动调用 forward 方法和其他钩子函数。因此，当你调用 class_object(input) 时，实际上触发了以下流程：
     # 执行 __call__ 方法。
     # 在 __call__ 方法内部，处理预定义钩子。
     # 调用用户定义的 forward 方法。
     # 返回 forward 方法的输出。
-    def __call__(self, qpos, image, actions=None, is_pad=None, vq_sample=None, pointcloud=None):
+    def __call__(self, qpos, image, actions=None, is_pad=None, vq_sample=None, depth_img=None, pointcloud=None):
         env_state = None
-        normalize = transforms.Normalize(mean=[0.485, 0.456, 0.406],
-                                         std=[0.229, 0.224, 0.225])
-        image = normalize(image)
-        if actions is not None: # training time
+        
+        # RGB图像标准化
+        rgb_normalize = transforms.Normalize(
+            mean=[0.485, 0.456, 0.406],
+            std=[0.229, 0.224, 0.225]
+        )
+        image = rgb_normalize(image)
+        
+        # 深度图预处理
+        if self.use_depth and depth_img is not None:
+            # 深度图标准化 - 使用不同的均值和标准差
+            depth_normalize = transforms.Normalize(
+                mean=[0.5],  # 深度图通常使用单通道
+                std=[0.5]
+            )
+            # 确保深度图是单通道的
+            if depth_img.dim() == 4:  # [B, C, H, W]
+                depth_img = depth_img.float()
+                if depth_img.shape[1] > 1:  # 如果通道数大于1，取第一个通道
+                    depth_img = depth_img[:, 0:1]
+            depth_img = depth_normalize(depth_img)
+
+        if actions is not None:  # training time
             actions = actions[:, :self.model.num_queries]
             is_pad = is_pad[:, :self.model.num_queries]
 
             loss_dict = dict()
-            a_hat, is_pad_hat, (mu, logvar), probs, binaries = self.model(qpos, image, env_state, actions, is_pad, vq_sample, pointcloud)
+            # 将深度图传入模型
+            a_hat, is_pad_hat, (mu, logvar), probs, binaries = self.model(
+                qpos=qpos, 
+                image=image, 
+                env_state=env_state, 
+                actions=actions, 
+                is_pad=is_pad, 
+                vq_sample=vq_sample, 
+                pointcloud=pointcloud if self.use_pcd else None,
+                depth_img=depth_img if self.use_depth else None
+            )
+
+            # 计算损失
             if self.vq or self.model.encoder is None:
                 total_kld = [torch.tensor(0.0)]
             else:
                 total_kld, dim_wise_kld, mean_kld = kl_divergence(mu, logvar)
+            
             if self.vq:
                 loss_dict['vq_discrepancy'] = F.l1_loss(probs, binaries, reduction='mean')
+            
             all_l1 = F.l1_loss(actions, a_hat, reduction='none')
             l1 = (all_l1 * ~is_pad.unsqueeze(-1)).mean()
             loss_dict['l1'] = l1
             loss_dict['kl'] = total_kld[0]
             loss_dict['loss'] = loss_dict['l1'] + loss_dict['kl'] * self.kl_weight
+            
             return loss_dict
-        else: # inference time
-            a_hat, _, (_, _), _, _ = self.model(qpos, image, env_state, vq_sample=vq_sample, pointcloud=pointcloud) # no action, sample from prior
+        
+        else:  # inference time
+            # 推理时也传入深度图
+            a_hat, _, (_, _), _, _ = self.model(
+                qpos=qpos, 
+                image=image, 
+                env_state=env_state, 
+                vq_sample=vq_sample, 
+                pointcloud=pointcloud if self.use_pcd else None,
+                depth_img=depth_img if self.use_depth else None
+            )
             return a_hat
 
     def configure_optimizers(self):
@@ -245,9 +338,7 @@ class ACTPolicy(nn.Module):
     def vq_encode(self, qpos, actions, is_pad):
         actions = actions[:, :self.model.num_queries]
         is_pad = is_pad[:, :self.model.num_queries]
-
         _, _, binaries, _, _ = self.model.encode(qpos, actions, is_pad)
-
         return binaries
         
     def serialize(self):

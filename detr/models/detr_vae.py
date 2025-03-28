@@ -35,7 +35,7 @@ def get_sinusoid_encoding_table(n_position, d_hid):
 
 class DETRVAE(nn.Module):
     """ This is the DETR module that performs object detection """
-    def __init__(self, backbones, transformer, encoder, state_dim, num_queries, camera_names, vq, vq_class, vq_dim, action_dim, pcl_backbone):
+    def __init__(self, backbones, transformer, encoder, state_dim, num_queries, camera_names, vq, vq_class, vq_dim, action_dim, pcl_backbone, depth_backbones):
         """ Initializes the model.
         Parameters:
             backbones: torch module of the backbone to be used. See backbone.py
@@ -63,6 +63,10 @@ class DETRVAE(nn.Module):
             self.input_proj_robot_state = nn.Linear(state_dim, hidden_dim)
             if pcl_backbone is not None:
                 self.input_proj_pointnet = nn.Linear(pcl_backbone.output_dim, hidden_dim)
+            if depth_backbones is not None:
+                self.input_proj_depth = nn.Conv2d(depth_backbones[0].num_channels, hidden_dim, kernel_size=1)
+                self.depth_backbones = nn.ModuleList(depth_backbones)
+                self.input_proj_depth = nn.Conv2d(depth_backbones[0].num_channels, hidden_dim, kernel_size=1)
         else:
             # input_dim = 14 + 7 # robot_state + env_state
             self.input_proj_robot_state = nn.Linear(state_dim, hidden_dim)
@@ -96,7 +100,9 @@ class DETRVAE(nn.Module):
             self.additional_pos_embed = nn.Embedding(3, hidden_dim) # learned position embedding for proprio, pointnet and latent
         else:
             self.additional_pos_embed = nn.Embedding(2, hidden_dim) # learned position embedding for proprio and latent
-
+        if depth_backbones is not None:
+            # 为深度特征添加额外的位置编码
+            self.depth_pos_embed = nn.Embedding(1, hidden_dim)
 
     def encode(self, qpos, actions=None, is_pad=None, vq_sample=None):
         bs, _ = qpos.shape
@@ -154,7 +160,7 @@ class DETRVAE(nn.Module):
 
         return latent_input, probs, binaries, mu, logvar
 
-    def forward(self, qpos, image, env_state, actions=None, is_pad=None, vq_sample=None, pointcloud=None):
+    def forward(self, qpos, image, env_state, actions=None, is_pad=None, vq_sample=None, pointcloud=None, depth_img=None):
         """
         qpos: batch, qpos_dim
         image: batch, num_cam, channel, height, width
@@ -173,30 +179,71 @@ class DETRVAE(nn.Module):
             all_cam_pos = []
             for cam_id, cam_name in enumerate(self.camera_names):
                 features, pos = self.backbones[cam_id](image[:, cam_id])
-                features = features[0] # take the last layer feature
+                features = features[0]  # 取最后一层特征
                 pos = pos[0]
                 all_cam_features.append(self.input_proj(features))
                 all_cam_pos.append(pos)
-            # proprioception features
-            proprio_input = self.input_proj_robot_state(qpos)
-            # point cloud features
+
+            # 处理深度图特征
+            if depth_img is not None and self.depth_backbones is not None:
+                all_depth_features = []
+                all_depth_pos = []
+                for cam_id, cam_name in enumerate(self.camera_names):
+                    depth_features, depth_pos = self.depth_backbones[cam_id](depth_img[:, cam_id])
+                    depth_features = depth_features[0]  # 取最后一层特征
+                    depth_pos = depth_pos[0]
+                    # 投影到相同的隐藏维度
+                    depth_features = self.input_proj_depth(depth_features)
+                    all_depth_features.append(depth_features)
+                    all_depth_pos.append(depth_pos)
+
+                # 合并深度特征
+                depth_src = torch.cat(all_depth_features, axis=3)
+                depth_pos = torch.cat(all_depth_pos, axis=3)
+
+            # 处理点云特征
             if pointcloud is not None and self.pcl_backbone is not None:
-                # 利用pointnet处理点云信息  
-                pcl_features = self.pcl_backbone(pointcloud)  # (batch, output_dim)
-                # 将点云特征投影到transformer的隐藏维度
-                pcl_input = self.input_proj_pointnet(pcl_features)  # (batch, hidden_dim)
-                # 将点云特征转换为transformer所需的序列形式
-                # pcl_input = pcl_input.unsqueeze(0)  # (1, batch, hidden_dim)
-                # fold camera dimension into width dimension
-                src = torch.cat(all_cam_features, axis=3)
-                pos = torch.cat(all_cam_pos, axis=3)
-                hs = self.transformer(src, None, self.query_embed.weight, pos, latent_input, proprio_input, self.additional_pos_embed.weight, pcl_input)[0]
+                pcl_features = self.pcl_backbone(pointcloud)
+                pcl_input = self.input_proj_pointnet(pcl_features)
             else:
-                # fold camera dimension into width dimension
-                src = torch.cat(all_cam_features, axis=3)
-                pos = torch.cat(all_cam_pos, axis=3)
-                hs = self.transformer(src, None, self.query_embed.weight, pos, latent_input, proprio_input, self.additional_pos_embed.weight)[0]
+                pcl_input = None
+
+            # 处理机器人状态
+            proprio_input = self.input_proj_robot_state(qpos)
+
+            # 合并RGB特征
+            src = torch.cat(all_cam_features, axis=3)
+            pos = torch.cat(all_cam_pos, axis=3)
+
+            # 根据是否有深度信息选择不同的transformer输入方式
+            if depth_img is not None and self.depth_backbones is not None:
+                # 调用修改后的transformer
+                hs = self.transformer(
+                    src=src,
+                    mask=None,
+                    query_embed=self.query_embed.weight,
+                    pos_embed=pos,
+                    latent_input=latent_input,
+                    proprio_input=proprio_input,
+                    additional_pos_embed=self.additional_pos_embed.weight,
+                    pcl_input=pcl_input,
+                    depth_src=depth_src,
+                    depth_pos_embed=depth_pos
+                )[0]
+            else:
+                # 不使用深度信息的原始调用方式
+                hs = self.transformer(
+                    src=src,
+                    mask=None,
+                    query_embed=self.query_embed.weight,
+                    pos_embed=pos,
+                    latent_input=latent_input,
+                    proprio_input=proprio_input,
+                    additional_pos_embed=self.additional_pos_embed.weight,
+                    pcl_input=pcl_input
+                )[0]
         else:
+            # 处理只有状态输入的情况
             qpos = self.input_proj_robot_state(qpos)
             env_state = self.input_proj_env_state(env_state)
             transformer_input = torch.cat([qpos, env_state], axis=1) # seq length = 2
@@ -300,9 +347,17 @@ def build(args):
     # backbone = None # from state for now, no need for conv nets
     # From image
     backbones = []
+    depth_backbones = []
     for _ in args.camera_names:
-        backbone = build_backbone(args)
+        backbone = build_backbone(args, input_channels=3)  # RGB图像使用3通道
         backbones.append(backbone)
+    
+    if args.use_depth is False:
+        depth_backbones = None
+    else:
+        for _ in args.depth_camera_names:
+            depth_backbone = build_backbone(args, input_channels=1)  # 深度图使用1通道
+            depth_backbones.append(depth_backbone)
 
     transformer = build_transformer(args)
 
@@ -321,20 +376,21 @@ def build(args):
             n_color=3,        # 点云颜色维度（如果有的话）
             output_dim=512,   # 输出特征维度
             hidden_dim=512,   # 隐藏层维度
-            hidden_depth=2,   # 隐藏层深度
+            hidden_depth=3    # 网络层数
         )
         
     model = DETRVAE(
         backbones,
         transformer,
         encoder,
-        state_dim=state_dim,
+        state_dim,
         num_queries=args.num_queries,
         camera_names=args.camera_names,
         vq=args.vq,
         vq_class=args.vq_class,
         vq_dim=args.vq_dim,
         action_dim=args.action_dim,
+        depth_backbones=depth_backbones,
         pcl_backbone=pcl_backbone
     )
 

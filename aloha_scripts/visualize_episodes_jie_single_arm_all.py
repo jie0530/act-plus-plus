@@ -163,7 +163,7 @@ def save_pointcloud_video(pcd_data, video_path, fps=30):
     fourcc = cv2.VideoWriter_fourcc(*'mp4v')
     out = cv2.VideoWriter(video_path, fourcc, fps, (640, 480))  # Adjust resolution as needed
     # TODO: 下采样
-    for i in range(10): # len(pcd_data['xyz'])
+    for i in range(len(pcd_data['xyz'])): # len(pcd_data['xyz'])
         xyz = pcd_data['xyz'][i]
         rgb = pcd_data['rgb'][i]
         img = np.zeros((480, 640, 3), dtype=np.uint8)  # Create a blank image

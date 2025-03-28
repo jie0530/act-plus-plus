@@ -16,12 +16,16 @@ def flatten_list(l):
     return [item for sublist in l for item in sublist]
 
 class EpisodicDataset(torch.utils.data.Dataset):
-    def __init__(self, dataset_path_list, camera_names, pointcloud_names, norm_stats, episode_ids, episode_len, chunk_size, policy_class):
+    def __init__(self, dataset_path_list, camera_names, norm_stats, episode_ids, episode_len, chunk_size, policy_class, depth_camera_names=None, pointcloud_names=None, use_depth=False, use_pcd=False):
         super(EpisodicDataset).__init__()
         self.episode_ids = episode_ids
         self.dataset_path_list = dataset_path_list
         self.camera_names = camera_names
-        self.pointcloud_names = pointcloud_names
+        self.depth_camera_names = depth_camera_names if depth_camera_names is not None else []
+        self.pointcloud_names = pointcloud_names if pointcloud_names is not None else []
+        self.use_depth = use_depth
+        self.use_pcd = use_pcd
+        
         self.norm_stats = norm_stats
         self.episode_len = episode_len
         self.chunk_size = chunk_size
@@ -76,18 +80,33 @@ class EpisodicDataset(torch.utils.data.Dataset):
                 for cam_name in self.camera_names:
                     image_dict[cam_name] = root[f'/observations/images/{cam_name}'][start_ts]
                 
+                # 获取深度图数据
+                depth_dict = dict()
+                if self.use_depth:
+                    for cam_name in self.depth_camera_names:
+                        depth_dict[cam_name] = root[f'/observations/depth_images/{cam_name}'][start_ts]
+                
                 # 获取点云数据
                 pointcloud_data = None
-                if '/observations/pointcloud' in root:
-                    pointcloud_data = {
-                        'xyz': root['/observations/pointcloud/cam_high/xyz'][start_ts],
-                        'rgb': root['/observations/pointcloud/cam_high/rgb'][start_ts]
-                    }
+                if self.use_pcd and '/observations/pointcloud' in root:
+                    pointcloud_data = {}
+                    for pc_name in self.pointcloud_names:
+                        pc_path = f'/observations/pointcloud/{pc_name}'
+                        if pc_path in root:
+                            pointcloud_data[pc_name] = {
+                                'xyz': root[f'{pc_path}/xyz'][start_ts],
+                                'rgb': root[f'{pc_path}/rgb'][start_ts]
+                            }
                 
                 if compressed:
                     for cam_name in image_dict.keys():
                         decompressed_image = cv2.imdecode(image_dict[cam_name], 1)
                         image_dict[cam_name] = np.array(decompressed_image)
+                
+                    if self.use_depth:
+                        for cam_name in depth_dict.keys():
+                            decompressed_depth = cv2.imdecode(depth_dict[cam_name], 1)
+                            depth_dict[cam_name] = np.array(decompressed_depth)
                 
                 # 获取动作数据
                 if is_sim:
@@ -111,21 +130,37 @@ class EpisodicDataset(torch.utils.data.Dataset):
                 all_cam_images.append(image_dict[cam_name])
             all_cam_images = np.stack(all_cam_images, axis=0)
 
+            if self.use_depth:
+                # construct depth images
+                all_depth_images = []
+
+                for cam_name in self.depth_camera_names:
+                    depth_img = depth_dict[cam_name]
+                    if len(depth_img.shape) == 3:
+                        depth_img = depth_img[:,:,0]
+                    all_depth_images.append(depth_img)
+                all_depth_images = np.stack(all_depth_images, axis=0)
+                all_depth_images = np.expand_dims(all_depth_images, axis=1)
+
             # construct observations
             image_data = torch.from_numpy(all_cam_images)
+            depth_data = torch.from_numpy(all_depth_images).float() if self.use_depth else None
             qpos_data = torch.from_numpy(qpos).float()
             action_data = torch.from_numpy(padded_action).float()
             is_pad = torch.from_numpy(is_pad).bool()
 
             # 获取点云数据
             if pointcloud_data is not None:
-                pointcloud_data['xyz'] = torch.from_numpy(pointcloud_data['xyz']).float()
-                pointcloud_data['rgb'] = torch.from_numpy(pointcloud_data['rgb']).float()
-            else:
-                pointcloud_data = {
-                    'xyz': torch.zeros((2000, 3), dtype=torch.float32),
-                    'rgb': torch.zeros((2000, 3), dtype=torch.float32)
-                }
+                for pc_name in pointcloud_data:
+                    pointcloud_data[pc_name]['xyz'] = torch.from_numpy(pointcloud_data[pc_name]['xyz']).float()
+                    pointcloud_data[pc_name]['rgb'] = torch.from_numpy(pointcloud_data[pc_name]['rgb']).float()
+            # else:
+                # pointcloud_data = {
+                #     'cam_high': {
+                #         'xyz': torch.zeros((2000, 3), dtype=torch.float32),
+                #         'rgb': torch.zeros((2000, 3), dtype=torch.float32)
+                #     }
+                # }
             # channel last to channel first for images
             image_data = torch.einsum('k h w c -> k c h w', image_data)
 
@@ -144,9 +179,14 @@ class EpisodicDataset(torch.utils.data.Dataset):
             if self.augment_images:
                 for transform in self.transformations:
                     image_data = transform(image_data)
+                    if depth_data is not None:
+                        if not isinstance(transform, transforms.ColorJitter):
+                            depth_data = transform(depth_data)
 
             # normalize image and change dtype to float
             image_data = image_data / 255.0
+            if depth_data is not None:
+                depth_data = (depth_data - depth_data.min()) / (depth_data.max() - depth_data.min() + 1e-6)
 
             if self.policy_class == 'Diffusion':
                 # normalize to [-1, 1]
@@ -160,8 +200,16 @@ class EpisodicDataset(torch.utils.data.Dataset):
         except:
             print(f'Error loading {dataset_path} in __getitem__')
             quit()
-
-        return image_data, qpos_data, action_data, is_pad, pointcloud_data
+        if self.use_depth:
+            if self.use_pcd:
+                return image_data, qpos_data, action_data, is_pad, depth_data, pointcloud_data
+            else:
+                return image_data, qpos_data, action_data, is_pad, depth_data
+        else:
+            if self.use_pcd:
+                return image_data, qpos_data, action_data, is_pad, pointcloud_data
+            else:
+                return image_data, qpos_data, action_data, is_pad
 
 
 def get_norm_stats(dataset_path_list):
@@ -239,7 +287,7 @@ def BatchSampler(batch_size, episode_len_l, sample_weights):
             batch.append(step_idx)
         yield batch
 
-def load_data(dataset_dir_l, name_filter, camera_names, pointcloud_names, batch_size_train, batch_size_val, chunk_size, skip_mirrored_data=False, load_pretrain=False, policy_class=None, stats_dir_l=None, sample_weights=None, train_ratio=0.99):
+def load_data(dataset_dir_l, name_filter, camera_names, batch_size_train, batch_size_val, chunk_size, skip_mirrored_data=False, load_pretrain=False, policy_class=None, stats_dir_l=None, sample_weights=None, train_ratio=0.99, depth_camera_names=None, pointcloud_names=None, use_depth=False, use_pcd=False):
     if type(dataset_dir_l) == str:
         dataset_dir_l = [dataset_dir_l]
     dataset_path_list_list = [find_all_hdf5(dataset_dir, skip_mirrored_data) for dataset_dir in dataset_dir_l]
@@ -282,8 +330,8 @@ def load_data(dataset_dir_l, name_filter, camera_names, pointcloud_names, batch_
     # print(f'train_episode_len: {train_episode_len}, val_episode_len: {val_episode_len}, train_episode_ids: {train_episode_ids}, val_episode_ids: {val_episode_ids}')
 
     # construct dataset and dataloader
-    train_dataset = EpisodicDataset(dataset_path_list, camera_names, norm_stats, train_episode_ids, train_episode_len, chunk_size, policy_class)
-    val_dataset = EpisodicDataset(dataset_path_list, camera_names, norm_stats, val_episode_ids, val_episode_len, chunk_size, policy_class)
+    train_dataset = EpisodicDataset(dataset_path_list, camera_names, norm_stats, train_episode_ids, train_episode_len, chunk_size, policy_class, depth_camera_names, pointcloud_names, use_depth, use_pcd)
+    val_dataset = EpisodicDataset(dataset_path_list, camera_names, norm_stats, val_episode_ids, val_episode_len, chunk_size, policy_class, depth_camera_names, pointcloud_names, use_depth, use_pcd)
     train_num_workers = (8 if os.getlogin() == 'zfu' else 16) if train_dataset.augment_images else 2
     val_num_workers = 8 if train_dataset.augment_images else 2
     print(f'Augment images: {train_dataset.augment_images}, train_num_workers: {train_num_workers}, val_num_workers: {val_num_workers}')

@@ -30,6 +30,8 @@ def get_args_parser():
                         help="Type of positional embedding to use on top of the image features")
     parser.add_argument('--camera_names', default=[], type=list, # will be overridden
                         help="A list of camera names")
+    parser.add_argument('--depth_camera_names', default=[], type=list, # will be overridden
+                        help="A list of depth camera names")
 
     # * Transformer
     parser.add_argument('--enc_layers', default=4, type=int, # will be overridden
@@ -54,7 +56,7 @@ def get_args_parser():
     
     # * Point Cloud
     parser.add_argument('--use_pcd', action='store_true', help='not use point cloud')
-
+    parser.add_argument('--use_depth', action='store_true', help='not use depth')
     # repeat args in imitate_episodes just to avoid error. Will not be used
     parser.add_argument('--eval', action='store_true')
     parser.add_argument('--onscreen_render', action='store_true')

@@ -67,6 +67,7 @@ def main(args):
     episode_len = task_config['episode_len']
     camera_names = task_config['camera_names']
     depth_camera_names = task_config['depth_camera_names']
+    pointcloud_names = task_config['pointcloud_names']
     stats_dir = task_config.get('stats_dir', None)
     sample_weights = task_config.get('sample_weights', None)
     train_ratio = task_config.get('train_ratio', 0.99)
@@ -92,16 +93,21 @@ def main(args):
                          'nheads': nheads,
                          'camera_names': camera_names,
                          'depth_camera_names': depth_camera_names,
+                         'pointcloud_names': pointcloud_names,
                          'vq': args['use_vq'],
                          'vq_class': args['vq_class'],
                          'vq_dim': args['vq_dim'],
                          'action_dim': 7,#org:16
                          'no_encoder': args['no_encoder'],
+                         'use_depth': args['use_depth'],
+                         'use_pcd': args['use_pcd'],
                          }
     elif policy_class == 'Diffusion':
 
         policy_config = {'lr': args['lr'],
                          'camera_names': camera_names,
+                         'depth_camera_names': depth_camera_names,
+                         'pointcloud_names': pointcloud_names,
                          'action_dim': 7,
                          'observation_horizon': 1,
                          'action_horizon': 8,
@@ -113,7 +119,10 @@ def main(args):
                          }
     elif policy_class == 'CNNMLP':
         policy_config = {'lr': args['lr'], 'lr_backbone': lr_backbone, 'backbone' : backbone, 'num_queries': 1,
-                         'camera_names': camera_names,}
+                         'camera_names': camera_names,
+                         'depth_camera_names': depth_camera_names,
+                         'pointcloud_names': pointcloud_names,
+                         }
     else:
         raise NotImplementedError
 
@@ -142,6 +151,7 @@ def main(args):
         'temporal_agg': args['temporal_agg'],
         'camera_names': camera_names,
         'depth_camera_names': depth_camera_names,
+        'pointcloud_names': pointcloud_names,
         'real_robot': not is_sim,
         'load_pretrain': args['load_pretrain'],#act没有用到
         'actuator_config': actuator_config,#act没有用到
@@ -228,15 +238,28 @@ def get_image(obs, camera_names, rand_crop_resize=False):
     
     return curr_image
 
+def get_depth(obs, depth_camera_names):
+    curr_depths = []
+    for cam_name in depth_camera_names:
+        curr_depth = rearrange(obs['depth_images'][cam_name], 'h w -> 1 h w')
+        curr_depths.append(curr_depth)
+    curr_depth = np.stack(curr_depths, axis=0)
+    curr_depth = torch.from_numpy(curr_depth).float().cuda().unsqueeze(0)
+    return curr_depth
 
 def get_pointcloud(obs):
     # 检查是否存在点云数据
     if 'pointcloud' not in obs:
         return None
     
+    # 将列表转换为numpy数组
+    xyz = np.array(obs['pointcloud']['xyz'], dtype=np.float32)
+    rgb = np.array(obs['pointcloud']['rgb'], dtype=np.float32)
+    
+    # 创建点云数据字典
     pointcloud_data = {
-        'xyz': torch.from_numpy(obs['pointcloud']['xyz']).float().cuda(),
-        'rgb': torch.from_numpy(obs['pointcloud']['rgb']).float().cuda()
+        'xyz': torch.from_numpy(xyz).float().cuda(),
+        'rgb': torch.from_numpy(rgb).float().cuda()
     }
     return pointcloud_data
 
@@ -250,6 +273,7 @@ def eval_bc(config, ckpt_name, save_episode=True, num_rollouts=50):
     policy_config = config['policy_config']
     camera_names = config['camera_names']
     depth_camera_names = config['depth_camera_names']
+    pointcloud_names = config['pointcloud_names']
     max_timesteps = config['episode_len']
     task_name = config['task_name']
     temporal_agg = config['temporal_agg']
@@ -327,21 +351,32 @@ def eval_bc(config, ckpt_name, save_episode=True, num_rollouts=50):
             qpos = pre_process(qpos_numpy)
             qpos = torch.from_numpy(qpos).float().cuda().unsqueeze(0)
             curr_image = get_image(obs, camera_names, rand_crop_resize=(config['policy_class'] == 'Diffusion'))
+            curr_depth = get_depth(obs, depth_camera_names)
             # 获取点云数据
             pointcloud = get_pointcloud(obs)
 
-            if t == 0:
-                # warm up
-                for _ in range(10):
-                    policy(qpos, curr_image, pointcloud=pointcloud)
-                print('network warm up done')
-                time1 = time.time()
+            # if t == 0:
+            #     # warm up
+            #     for _ in range(10):
+            #         policy(qpos, curr_image, pointcloud=pointcloud)
+            #     print('network warm up done')
+            #     time1 = time.time()
 
             ### query policy
             time3 = time.time()
             if config['policy_class'] == "ACT":
                 if t % query_frequency == 0:
-                    all_actions = policy(qpos, curr_image, pointcloud=pointcloud)
+                    if policy.use_depth:
+                        if policy.use_pcd:
+                            None # TODO
+                            # all_actions = policy(qpos, curr_image, depth_data=curr_depth, pointcloud=pointcloud)
+                        else:
+                            all_actions = policy(qpos, curr_image, depth_data=curr_depth)
+                    else:
+                        if policy.use_pcd:
+                            all_actions = policy(qpos, curr_image, pointcloud=pointcloud)
+                        else:
+                            all_actions = policy(qpos, curr_image)
                 if temporal_agg:
                     print(f"t: {t}")
                     all_time_actions[[t], t:t+num_queries] = all_actions
@@ -603,5 +638,7 @@ if __name__ == '__main__':
     parser.add_argument('--vq_class', action='store', type=int, help='vq_class')
     parser.add_argument('--vq_dim', action='store', type=int, help='vq_dim')
     parser.add_argument('--no_encoder', action='store_true')
+    parser.add_argument('--use_depth', action='store_true')
+    parser.add_argument('--use_pcd', action='store_true')
     
     main(vars(parser.parse_args()))

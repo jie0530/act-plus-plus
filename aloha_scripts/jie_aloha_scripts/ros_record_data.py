@@ -203,8 +203,8 @@ class DataRecorder:
             encode_param = [int(cv2.IMWRITE_JPEG_QUALITY), 50]
             try:
                 # obs['qpos'] = list(self.joint_msg.position[:6]) + list(self.joint_msg.position[16:22]) + list(self.left_action_gripper_msg.data[:6]) + list(self.right_action_gripper_msg.data[:6])
-                obs['qpos'] = list(self.joint_msg.position[:6]) + list([0]*6)
-                # obs['qpos'] = list(self.joint_msg.position[:6]) + list(self.right_action_gripper_msg.data[:6])
+                # obs['qpos'] = list(self.joint_msg.position[:6]) + list([0]*6)
+                obs['qpos'] = list(self.joint_msg.position[:6]) + list(self.right_action_gripper_msg.data[:6])
                 try:
                     # obs['qvel'] = list(self.joint_msg.position[:6]) + list(self.joint_msg.position[16:22]) + list([0]*6) + list([0]*6) # TODO gripper实际速度值;
                     # obs['effort'] = list(self.joint_msg.position[:6]) + list(self.joint_msg.position[16:22]) + list([0]*6) + list([0]*6)## TODO gripper实际力值;
@@ -216,8 +216,8 @@ class DataRecorder:
                     # obs['effort'] = [] 
                 # gripper = list(self.left_action_gripper_msg.data) + list(self.right_action_gripper_msg.data)
                 # action_arm = list(self.joint_msg.position[:6]) + list(self.joint_msg.position[16:22])
-                # gripper = list(self.right_action_gripper_msg.data)
-                gripper = list([0]*6)
+                gripper = list(self.right_action_gripper_msg.data)
+                # gripper = list([0]*6)
                 
                 action_arm = list(self.joint_msg.position[:6])
                 obs['action'] = list(action_arm) + list(gripper)

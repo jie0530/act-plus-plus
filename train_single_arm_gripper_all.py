@@ -14,9 +14,9 @@ from torchvision import transforms
 
 from constants import FPS
 # from constants import PUPPET_GRIPPER_JOINT_OPEN
-from utils_arm_gripper import load_data # data functions
-from utils_arm_gripper import sample_box_pose, sample_insertion_pose # robot functions
-from utils_arm_gripper import compute_dict_mean, set_seed, detach_dict, calibrate_linear_vel, postprocess_base_action # helper functions
+from utils_arm_gripper_all import load_data # data functions
+from utils_arm_gripper_all import sample_box_pose, sample_insertion_pose # robot functions
+from utils_arm_gripper_all import compute_dict_mean, set_seed, detach_dict, calibrate_linear_vel, postprocess_base_action # helper functions
 from policy import ACTPolicy, CNNMLPPolicy, DiffusionPolicy
 from visualize_episodes import save_videos
 
@@ -63,7 +63,8 @@ def main(args):
     # num_episodes = task_config['num_episodes']
     episode_len = task_config['episode_len']
     camera_names = task_config['camera_names']
-    pointcloud_names = task_config['pointcloud_names']
+    depth_camera_names = task_config.get('depth_camera_names', None)
+    pointcloud_names = task_config.get('pointcloud_names', None)
     stats_dir = task_config.get('stats_dir', None)
     sample_weights = task_config.get('sample_weights', None)
     train_ratio = task_config.get('train_ratio', 0.99)
@@ -88,6 +89,7 @@ def main(args):
                          'dec_layers': dec_layers,
                          'nheads': nheads,
                          'camera_names': camera_names,
+                         'depth_camera_names': depth_camera_names,
                          'pointcloud_names': pointcloud_names,
                          'vq': args['use_vq'],
                          'vq_class': args['vq_class'],
@@ -95,11 +97,13 @@ def main(args):
                          'action_dim': 7,#org:16
                          'no_encoder': args['no_encoder'],
                          'use_pcd': args['use_pcd'],
+                         'use_depth': args['use_depth'],
                          }
     elif policy_class == 'Diffusion':
 
         policy_config = {'lr': args['lr'],
                          'camera_names': camera_names,
+                         'depth_camera_names': depth_camera_names,
                          'pointcloud_names': pointcloud_names,
                          'action_dim': 7,
                          'observation_horizon': 1,
@@ -113,6 +117,7 @@ def main(args):
     elif policy_class == 'CNNMLP':
         policy_config = {'lr': args['lr'], 'lr_backbone': lr_backbone, 'backbone' : backbone, 'num_queries': 1,
                          'camera_names': camera_names,
+                         'depth_camera_names': depth_camera_names,
                          'pointcloud_names': pointcloud_names,
                          }
     else:
@@ -142,6 +147,7 @@ def main(args):
         'seed': args['seed'],
         'temporal_agg': args['temporal_agg'],
         'camera_names': camera_names,
+        'depth_camera_names': depth_camera_names,
         'pointcloud_names': pointcloud_names,
         'real_robot': not is_sim,
         'load_pretrain': args['load_pretrain'],#act没有用到
@@ -172,7 +178,25 @@ def main(args):
         print()
         exit()
 
-    train_dataloader, val_dataloader, stats, _ = load_data(dataset_dir, name_filter, camera_names, batch_size_train, batch_size_val, args['chunk_size'], args['skip_mirrored_data'], config['load_pretrain'], policy_class, stats_dir_l=stats_dir, sample_weights=sample_weights, train_ratio=train_ratio)
+    # train_dataloader, val_dataloader, stats, _ = load_data(dataset_dir, name_filter, camera_names, batch_size_train, batch_size_val, args['chunk_size'], args['skip_mirrored_data'], config['load_pretrain'], policy_class, stats_dir, sample_weights, train_ratio, depth_camera_names, pointcloud_names)
+    train_dataloader, val_dataloader, stats, _ = load_data(
+        dataset_dir,                    # 必需的位置参数
+        name_filter,                    # 必需的位置参数
+        camera_names,                   # 必需的位置参数
+        batch_size_train,              # 必需的位置参数
+        batch_size_val,                # 必需的位置参数
+        args['chunk_size'],            # 必需的位置参数
+        skip_mirrored_data=args['skip_mirrored_data'],    # 关键字参数
+        load_pretrain=config['load_pretrain'],            # 关键字参数
+        policy_class=policy_class,                        # 关键字参数
+        stats_dir_l=stats_dir,                           # 关键字参数
+        sample_weights=sample_weights,                    # 关键字参数
+        train_ratio=train_ratio,                         # 关键字参数
+        depth_camera_names=depth_camera_names,           # 关键字参数
+        pointcloud_names=pointcloud_names,                # 关键字参数
+        use_depth=args['use_depth'],
+        use_pcd=args['use_pcd']
+    )
 
     # save dataset stats
     stats_path = os.path.join(ckpt_dir, f'dataset_stats.pkl')
@@ -540,17 +564,33 @@ def eval_bc(config, ckpt_name, save_episode=True, num_rollouts=50):
 
 
 def forward_pass(data, policy):
-    image_data, qpos_data, action_data, is_pad, pointcloud_data = data
+    if len(data) == 6:
+        image_data, qpos_data, action_data, is_pad, depth_data, pointcloud_data = data
+    elif len(data) == 5:
+        # image_data, qpos_data, action_data, is_pad, depth_data = data #默认有depth_data才有pcd
+        image_data, qpos_data, action_data, is_pad, pointcloud_data = data #默认有depth_data才有pcd
+    else:
+        image_data, qpos_data, action_data, is_pad = data
     image_data, qpos_data, action_data, is_pad = image_data.cuda(), qpos_data.cuda(), action_data.cuda(), is_pad.cuda()
-    
+
     # 将 pointcloud_data 字典中的张量移动到 CUDA 设备
-    if pointcloud_data is not None:
+    if policy.use_pcd:
         pointcloud_data = {
-            'xyz': pointcloud_data['xyz'].cuda(),
-            'rgb': pointcloud_data['rgb'].cuda()
+            'xyz': pointcloud_data['fused_pcd']['xyz'].cuda(),
+            'rgb': pointcloud_data['fused_pcd']['rgb'].cuda()
         }
-    
-    return policy(qpos_data, image_data, action_data, is_pad, pointcloud=pointcloud_data)
+
+    if policy.use_depth:
+        depth_data = depth_data.cuda() # 将 depth_data 字典中的张量移动到 CUDA 设备
+        if policy.use_pcd:  
+            return policy(qpos_data, image_data, action_data, is_pad, depth_img=depth_data, pointcloud=pointcloud_data)
+        else:
+            return policy(qpos_data, image_data, action_data, is_pad, depth_img=depth_data)
+    else:
+        if policy.use_pcd:
+            return policy(qpos_data, image_data, action_data, is_pad, pointcloud=pointcloud_data)
+        else:
+            return policy(qpos_data, image_data, action_data, is_pad)
 
 
 def train_bc(train_dataloader, val_dataloader, config):
@@ -734,5 +774,6 @@ if __name__ == '__main__':
     parser.add_argument('--vq_dim', action='store', type=int, help='vq_dim')
     parser.add_argument('--no_encoder', action='store_true')
     parser.add_argument('--use_pcd', action='store_true', help='not use point cloud')
+    parser.add_argument('--use_depth', action='store_true', help='not use depth')
     
     main(vars(parser.parse_args()))

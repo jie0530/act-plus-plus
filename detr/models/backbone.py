@@ -112,11 +112,23 @@ class Joiner(nn.Sequential):
         return out, pos
 
 
-def build_backbone(args):
+def build_backbone(args, input_channels=3):
     position_embedding = build_position_encoding(args)
     train_backbone = args.lr_backbone > 0
     return_interm_layers = args.masks
-    backbone = Backbone(args.backbone, train_backbone, return_interm_layers, args.dilation)
+    
+    # 修改ResNet的输入通道数
+    backbone = getattr(torchvision.models, args.backbone)(
+        replace_stride_with_dilation=[False, False, args.dilation],
+        pretrained=is_main_process() and input_channels == 3,  # 只在RGB图像时使用预训练权重
+        norm_layer=FrozenBatchNorm2d)
+    
+    # 如果输入通道数不是3，需要修改第一个卷积层
+    if input_channels != 3:
+        backbone.conv1 = nn.Conv2d(input_channels, 64, kernel_size=7, stride=2, padding=3, bias=False)
+    
+    num_channels = 512 if args.backbone in ('resnet18', 'resnet34') else 2048
+    backbone = BackboneBase(backbone, train_backbone, num_channels, return_interm_layers)
     model = Joiner(backbone, position_embedding)
     model.num_channels = backbone.num_channels
     return model

@@ -46,24 +46,59 @@ class Transformer(nn.Module):
             if p.dim() > 1:
                 nn.init.xavier_uniform_(p)
 
-    def forward(self, src, mask, query_embed, pos_embed, latent_input=None, proprio_input=None, additional_pos_embed=None, pcl_input=None):
-        # TODO flatten only when input has H and W
-        if len(src.shape) == 4: # has H and W
-            # flatten NxCxHxW to HWxNxC
+    def forward(self, src, mask, query_embed, pos_embed, latent_input=None, proprio_input=None, 
+                additional_pos_embed=None, pcl_input=None, depth_src=None, depth_pos_embed=None):
+        """
+        Args:
+            src: RGB图像特征 [bs, c, h, w]
+            depth_src: 深度图特征 [bs, c, h, w]
+            depth_pos_embed: 深度图位置编码
+        """
+        # 处理RGB特征
+        if len(src.shape) == 4:  # has H and W
             bs, c, h, w = src.shape
-            src = src.flatten(2).permute(2, 0, 1)
+            src = src.flatten(2).permute(2, 0, 1)  # [h*w, bs, c]
             pos_embed = pos_embed.flatten(2).permute(2, 0, 1).repeat(1, bs, 1)
+            
+            # 处理深度特征
+            if depth_src is not None:
+                # 确保深度特征的维度与RGB特征匹配
+                if len(depth_src.shape) == 4:
+                    if depth_src.shape != src.shape:
+                        # 如果维度不匹配，调整深度特征的维度
+                        depth_src = F.interpolate(depth_src, size=(h, w), mode='bilinear', align_corners=False)
+                    depth_src = depth_src.flatten(2).permute(2, 0, 1)  # [h*w, bs, c]
+                elif len(depth_src.shape) == 3:
+                    depth_src = depth_src.unsqueeze(1).repeat(1, bs, 1)  # [h*w, bs, c]
+                
+                if depth_pos_embed is not None:
+                    if len(depth_pos_embed.shape) == 4:
+                        if depth_pos_embed.shape != pos_embed.shape:
+                            depth_pos_embed = F.interpolate(depth_pos_embed, size=(h, w), mode='bilinear', align_corners=False)
+                        depth_pos_embed = depth_pos_embed.flatten(2).permute(2, 0, 1).repeat(1, bs, 1)
+                    elif len(depth_pos_embed.shape) == 3:
+                        depth_pos_embed = depth_pos_embed.unsqueeze(1).repeat(1, bs, 1)
+                else:
+                    depth_pos_embed = pos_embed  # 如果没有专门的深度位置编码，使用RGB的
+
+                # 合并RGB和深度特征
+                src = torch.cat([src, depth_src], dim=0)  # [2*h*w, bs, c]
+                pos_embed = torch.cat([pos_embed, depth_pos_embed], dim=0)  # [2*h*w, bs, c]
+
             query_embed = query_embed.unsqueeze(1).repeat(1, bs, 1)
             # mask = mask.flatten(1)
 
             additional_pos_embed = additional_pos_embed.unsqueeze(1).repeat(1, bs, 1) # seq, bs, dim
             pos_embed = torch.cat([additional_pos_embed, pos_embed], axis=0)
 
+            # 处理额外的输入特征（latent, proprio, pcl）
             if pcl_input is not None:
                 # 添加点云特征到输入序列
                 addition_input = torch.stack([latent_input, proprio_input, pcl_input], axis=0)
             else:
                 addition_input = torch.stack([latent_input, proprio_input], axis=0)
+     
+            # 将所有特征连接在一起
             src = torch.cat([addition_input, src], axis=0)
         else:
             assert len(src.shape) == 3
@@ -73,11 +108,17 @@ class Transformer(nn.Module):
             pos_embed = pos_embed.unsqueeze(1).repeat(1, bs, 1)
             query_embed = query_embed.unsqueeze(1).repeat(1, bs, 1)
 
+        # 生成目标查询
         tgt = torch.zeros_like(query_embed)
+        
+        # 通过编码器
         memory = self.encoder(src, src_key_padding_mask=mask, pos=pos_embed)
+        
+        # 通过解码器
         hs = self.decoder(tgt, memory, memory_key_padding_mask=mask,
-                          pos=pos_embed, query_pos=query_embed)
+                         pos=pos_embed, query_pos=query_embed)
         hs = hs.transpose(1, 2)
+        
         return hs
 
 class TransformerEncoder(nn.Module):

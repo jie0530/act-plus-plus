@@ -11,6 +11,8 @@ from finger_state_handle import ModbusClient
 import math
 from sensor_msgs.msg import PointCloud2
 import ros_numpy
+from typing import Dict, Optional
+from functools import partial
 from utils import get_xyz_points
 def fix_image(cv_image,cv_type=cv2.COLOR_BGR2RGB,target_height = 480,target_width = 640):
     # 将图像从BGR转换为RGB
@@ -68,8 +70,10 @@ class DataRecorder:
         self.depth_image_buffer = {}
         
         # 订阅点云topic
-        self.pointcloud_msg = None
-        self.pointcloud_sub = rospy.Subscriber('/camera/depth/points', PointCloud2, self.pointcloud_callback)
+        self.point_cloud_data = None
+        self.point_cloud_sub = rospy.Subscriber('/fused_pcd', PointCloud2, self.pointcloud_callback)
+        rospy.wait_for_message('/fused_pcd', PointCloud2)
+        print("Subscribed to fused_pcd topic")
 
         # 与机器人控制器建立连接，连接成功返回一个机器人对象
         self.robot = Robot.RPC('192.168.58.2')
@@ -119,11 +123,12 @@ class DataRecorder:
             # 使用make_callback函数创建callback
             depth_callback = depth_make_callback(cam_name, self.bridge, self.depth_image_buffer, self.depth_image_shape)
             self.depth_image_sub[cam_name] = rospy.Subscriber(cam_topic, Image, depth_callback)
-            print(f"Subscribed to {cam_name} topic: {cam_topic}")    
+            print(f"Subscribed to {cam_name} topic: {cam_topic}")
+            
  
  
     def pointcloud_callback(self, pcd_msg: PointCloud2):
-        self.point_cloud_data = {}
+        # self.point_cloud_data = {}
         # stamp = pcd_msg.header.stamp.secs + pcd_msg.header.stamp.nsecs * 1e-9
         pcd = ros_numpy.point_cloud2.pointcloud2_to_array(pcd_msg)
         pcd_xyz, pcd_xyz_mask = get_xyz_points(pcd, remove_nans=True)
@@ -153,7 +158,7 @@ class DataRecorder:
 
         obs = {'qpos': [], 'images': {}, 'depth_images': {}}
         if include_pcl:
-            obs['pointcloud'] = {}
+            obs['pointcloud'] = {'xyz': [], 'rgb': []}
         
         # 获取关节位置
         if include_joints:
@@ -189,8 +194,8 @@ class DataRecorder:
             # 处理点云数据
             if include_pcl:
                 if self.point_cloud_data is not None:
-                    obs['pointcloud']['xyz'] = self.point_cloud_data['xyz']
-                    obs['pointcloud']['rgb'] = self.point_cloud_data['rgb']
+                    obs['pointcloud']['xyz'].extend(self.point_cloud_data['xyz'])
+                    obs['pointcloud']['rgb'].extend(self.point_cloud_data['rgb'])
             
         except Exception as e:
             print(e)

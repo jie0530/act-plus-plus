@@ -7,3 +7,8 @@
 
 
 ~/jie_ws/src/stark-serialport-example/python/modbus_example$ python3 ctrl_hand.py
+
+
+python run_pcd_fusion_publisher.py --spatial_cutoff -1.2 -0.5 -0.5 0.5 0.0 0.1 --downsample_N 4096 --publish_freq 20 --use_fps --fps_h 5
+
+python3 robot_base_to_tool_tf_pub2.py

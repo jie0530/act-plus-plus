@@ -38,7 +38,7 @@ TASK_CONFIGS = {
     'aloha_pick_fruit9':{
         'dataset_dir': '/home/wsco/jie_ws/src/act-plus-plus/aloha_scripts/data/aloha_pick_fruit9',
         'train_ratio': 0.92,
-        'episode_len': 100,
+        'episode_len': 160,
         # 'camera_names': ['cam_high', 'cam_left', 'cam_right']
         'camera_names': {
                         'cam_high':"/cam_high/color/image_raw",
@@ -51,9 +51,10 @@ TASK_CONFIGS = {
             'cam_right':"/cam_right/aligned_depth_to_color/image_raw"
         },
         'pointcloud_names': {
-            'cam_high':"/cam_high/depth/color/points",
-            # 'cam_left':"/cam_left/depth/color/points",
-            # 'cam_right':"/cam_right/depth/color/points"
+            # 'cam_high':"/individual_pcd_cam_high",
+            # 'cam_left':"/individual_pcd_cam_left",
+            # 'cam_right':"/individual_pcd_cam_right",
+            'fused_pcd':"/fused_pcd"
         },
     },
     
