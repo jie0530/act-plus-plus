@@ -447,8 +447,14 @@ def visualize_actions(inference_actions, ground_truth_actions, rows_per_plot=3):
             axs[i].legend()
         
         plt.tight_layout()
-        plt.savefig(f"action_comparison_part{plot_idx + 1}.png")
-        print(f'Saved action comparison plot to: action_comparison_part{plot_idx + 1}.png')
+        base_filename = f"action_comparison_part{plot_idx + 1}"
+        filename = base_filename + ".png"
+        counter = 1
+        while os.path.exists(filename):
+            filename = f"{base_filename}_{counter}.png"
+            counter += 1
+        plt.savefig(filename)
+        print(f'Saved action comparison plot to: action_comparison_part{filename}.png')
         plt.close()
 
 

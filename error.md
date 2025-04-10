@@ -35,3 +35,7 @@
    #安装指定版本
    pip install opencv-python==4.1.2.30
    ```
+
+10. Cannot mix incompatible Qt library (version 0x50c08) with this library (version 0x50c05)
+   [原因]CoppeliaSim启动涉及到了QT的部分
+   [解决]将LD_LIBRARY_PATH和QT_QPA_PLATFORM_PLUGIN_PATH注释掉，关掉所有的terminal或者source一下，重新运行即可解决原来的问题

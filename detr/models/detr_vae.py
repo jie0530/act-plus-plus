@@ -205,6 +205,7 @@ class DETRVAE(nn.Module):
             if pointcloud is not None and self.pcl_backbone is not None:
                 pcl_features = self.pcl_backbone(pointcloud)
                 pcl_input = self.input_proj_pointnet(pcl_features)
+                pcl_input = pcl_input.unsqueeze(0)
             else:
                 pcl_input = None
 
