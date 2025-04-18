@@ -16,7 +16,7 @@ class ModbusClient:
         self.device = None
         filename = os.path.basename(__file__).split(".")[0]
         # print(f"{filename}.log")
-        StarkSDK.init(isModbus=True, log_level=logging.INFO, log_file_name=f"{filename}.log")
+        StarkSDK.init(isModbus=True, log_level=logging.INFO, log_file_name=f"logs/{filename}.log")
 
     def connect(self):
         """连接 Modbus 设备并初始化"""
@@ -24,7 +24,7 @@ class ModbusClient:
         StarkSDK.set_error_callback(lambda error: SKLog.error(f"Error: {error.message}"))
 
         ports = serial_ports()
-        SKLog.info(f"serial_ports: {ports}")
+        # SKLog.info(f"serial_ports: {ports}")
         if len(ports) == 0:
             SKLog.error("No serial ports found")
             return False

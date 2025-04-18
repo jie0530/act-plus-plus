@@ -29,7 +29,7 @@ def load_hdf5(dataset_dir, dataset_name):
     with h5py.File(dataset_path, 'r') as root:
         compressed = root.attrs.get('compress', False)
         qpos = root['/observations/qpos'][()]
-        qvel = root['/observations/qvel'][()]
+        # qvel = root['/observations/qvel'][()]
         if 'effort' in root.keys():
             effort = root['/observations/effort'][()]
         else:
@@ -49,14 +49,29 @@ def load_hdf5(dataset_dir, dataset_name):
             print("Warning: No depth images found in dataset")
         
         pcd_data_dict = dict()
-        if '/observations/pointcloud' in root:
-            for cam_name in root[f'/observations/pointcloud/'].keys():
-                pcd_data_dict[cam_name] = dict()
-                pcd_data_dict[cam_name]['xyz'] = root[f'/observations/pointcloud/{cam_name}/xyz'][()]
-                pcd_data_dict[cam_name]['rgb'] = root[f'/observations/pointcloud/{cam_name}/rgb'][()]
-                pcd_data_dict[cam_name]['padding_mask'] = root[f'/observations/pointcloud/{cam_name}/padding_mask'][()]
+        # 检查预测点云数据
+        if '/observations/pointcloud_pred' in root:
+            pcd_data_dict['pred'] = dict()
+            for cam_name in root[f'/observations/pointcloud_pred/'].keys():
+                pcd_data_dict['pred'][cam_name] = dict()
+                pcd_data_dict['pred'][cam_name]['xyz'] = root[f'/observations/pointcloud_pred/{cam_name}/xyz'][()]
+                pcd_data_dict['pred'][cam_name]['rgb'] = root[f'/observations/pointcloud_pred/{cam_name}/rgb'][()]
+                pcd_data_dict['pred'][cam_name]['padding_mask'] = root[f'/observations/pointcloud_pred/{cam_name}/padding_mask'][()]
+            print("Successfully loaded predicted point cloud data")
         else:
-            print("Warning: No point cloud data found in dataset")
+            print("Warning: No predicted point cloud data found in dataset")
+            
+        # 检查原始点云数据
+        if '/observations/pointcloud_raw' in root:
+            pcd_data_dict['raw'] = dict()
+            for cam_name in root[f'/observations/pointcloud_raw/'].keys():
+                pcd_data_dict['raw'][cam_name] = dict()
+                pcd_data_dict['raw'][cam_name]['xyz'] = root[f'/observations/pointcloud_raw/{cam_name}/xyz'][()]
+                pcd_data_dict['raw'][cam_name]['rgb'] = root[f'/observations/pointcloud_raw/{cam_name}/rgb'][()]
+                pcd_data_dict['raw'][cam_name]['padding_mask'] = root[f'/observations/pointcloud_raw/{cam_name}/padding_mask'][()]
+            print("Successfully loaded raw point cloud data")
+        else:
+            print("Warning: No raw point cloud data found in dataset")
             
         if compressed:
             compress_len = root['/compress_len'][()]
@@ -92,7 +107,7 @@ def load_hdf5(dataset_dir, dataset_name):
                     depth_image_list.append(depth_image)
                 depth_image_dict[cam_name] = depth_image_list
 
-    return qpos, qvel, effort, action, image_dict, depth_image_dict, pcd_data_dict
+    return qpos, effort, action, image_dict, depth_image_dict, pcd_data_dict
 
 def main(args):
     dataset_dir = args['dataset_dir']
@@ -113,7 +128,7 @@ def main(args):
             dataset_name = dataset_name.rsplit('.', 1)[0]
             print(f"Visualizing dataset: {dataset_name}")
             # data_path_complete = True
-            qpos, qvel, effort, action, image_dict, depth_image_dict, pcd_data_dict = load_hdf5(dataset_dir, dataset_name)
+            qpos, effort, action, image_dict, depth_image_dict, pcd_data_dict = load_hdf5(dataset_dir, dataset_name)
             save_videos(image_dict, DT, video_path=os.path.join(vis_data_dir, dataset_name + '_video.mp4'))
             if depth_image_dict:  # 只在有深度图像数据时保存
                 save_videos(depth_image_dict, DT, video_path=os.path.join(vis_data_dir, dataset_name + '_depth_video.mp4'))
@@ -132,7 +147,7 @@ def main(args):
         else:
             dataset_name = f'episode_{episode_idx}'
 
-        qpos, qvel, effort, action, image_dict, depth_image_dict, pcd_data_dict = load_hdf5(dataset_dir, dataset_name)
+        qpos, effort, action, image_dict, depth_image_dict, pcd_data_dict = load_hdf5(dataset_dir, dataset_name)
         print('hdf5 loaded!!')
         save_videos(image_dict, DT, video_path=os.path.join(vis_data_dir, dataset_name + '_video.mp4'))
         if depth_image_dict:  # 只在有深度图像数据时保存
@@ -140,10 +155,11 @@ def main(args):
         visualize_joints(qpos, action, plot_path=os.path.join(vis_data_dir, dataset_name + '_qpos.png'))
         
         if pcd_data_dict:
-            for cam_name in pcd_data_dict.keys():
-                decompressed_pcd = decompress_pointcloud(pcd_data_dict[cam_name])
-                # Save point cloud video
-                save_pointcloud_video(decompressed_pcd, os.path.join(vis_data_dir, dataset_name + '_' + cam_name + '_pcd_video.mp4'))
+            for point_cloud_type in ['pred', 'raw']:
+                for cam_name in pcd_data_dict[point_cloud_type].keys():
+                    decompressed_pcd = decompress_pointcloud(pcd_data_dict[point_cloud_type][cam_name])
+                    # Save point cloud video
+                    save_pointcloud_video(decompressed_pcd, os.path.join(vis_data_dir, dataset_name + '_' + point_cloud_type + '_' + cam_name + '_pcd_video.mp4'))
         # visualize_single(effort, 'effort', plot_path=os.path.join(dataset_dir, dataset_name + '_effort.png'))
         # visualize_single(action - qpos, 'tracking_error', plot_path=os.path.join(dataset_dir, dataset_name + '_error.png'))
         # visualize_base(base_action, plot_path=os.path.join(dataset_dir, dataset_name + '_base_action.png'))

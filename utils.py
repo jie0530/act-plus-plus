@@ -19,6 +19,7 @@ def get_xyz_points(cloud_array, remove_nans=True, dtype=np.float32):
     mask = None
     # remove crap points
     if remove_nans:
+        # 将xyz的nan值去除
         mask = (
             np.isfinite(cloud_array["x"])
             & np.isfinite(cloud_array["y"])
