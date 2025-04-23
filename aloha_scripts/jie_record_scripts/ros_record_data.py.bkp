@@ -12,16 +12,13 @@ import queue
 from inference_d3roma import D3RoMa
 from utils_d3roma.camera import Realsense
 from sensor_msgs.msg import PointCloud2
-from std_msgs.msg import Float32MultiArray
 import ros_numpy
-import time
 
 class DataRecorder:
-    def __init__(self,DT, max_timesteps,camera_name_topic_dict, dataset_dir, dataset_name, overwrite, debug=False):
+    def __init__(self,DT, max_timesteps,camera_name_topic_dict, dataset_dir, dataset_name, overwrite):
 
         self.dataset_dir = dataset_dir
         self.overwrite = overwrite
-        self.debug = debug
 
         self.make_file_path(self.dataset_dir,dataset_name,self.overwrite)
         self.max_timesteps=max_timesteps
@@ -35,15 +32,13 @@ class DataRecorder:
         # rospy.init_node('pointcloud_publisher', anonymous=True)
         self.pub_raw = rospy.Publisher('raw_pcl', PointCloud2, queue_size=10)
         self.pub_pred = rospy.Publisher('pred_pcl', PointCloud2, queue_size=10)
-        70
-        # # 实例化 ModbusClient 1是左手，2是右手
-        # self.modbus_client = ModbusClient(serial_port_name="/dev/ttyUSB0", slave_id=1)  # 替换为实际的串口名称
-        # # 连接设备
-        # if not self.modbus_client.connect():
-        #     print("Failed to connect to Modbus device")
-        #     return
-        self.right_action_gripper_msg:Float32MultiArray = None
-        self.right_action_gripper_sub = rospy.Subscriber('/right_finger_status', Float32MultiArray, lambda msg: setattr(self, 'right_action_gripper_msg', msg))
+        
+        # 实例化 ModbusClient 1是左手，2是右手
+        self.modbus_client = ModbusClient(serial_port_name="/dev/ttyUSB0", slave_id=1)  # 替换为实际的串口名称
+        # 连接设备
+        if not self.modbus_client.connect():
+            print("Failed to connect to Modbus device")
+            return
         
         # 定义相机序列号映射
         self.camera_serials = camera_name_topic_dict
@@ -68,8 +63,7 @@ class DataRecorder:
         self.cloud_raw = {cam_name: None for cam_name in self.cameras}
         
         # 初始化D3RoMa
-        self.camera_config_right = Realsense.default_real("d435_right")
-        self.camera_config_high = Realsense.default_real("d435_high")
+        self.camera_config = Realsense.default_real("d435_right")
         overrides = [
             # uncomment if you choose variant left+right+raw
             # "task=eval_ldm_mixed",
@@ -88,8 +82,12 @@ class DataRecorder:
             "task.num_inference_timesteps=5", "task.num_intermediate_images=1",
             "task.write_pcd=true"
         ]
-        self.d3roma_right = D3RoMa(overrides, self.camera_config_right, variant="rgb+raw")
-        self.d3roma_high = D3RoMa(overrides, self.camera_config_high, variant="rgb+raw")
+        self.d3roma = D3RoMa(overrides, self.camera_config, variant="rgb+raw")
+
+        # self.frame_queue = queue.Queue(maxsize=10)s
+        # 启动推理线程
+        # self.inference_thread = threading.Thread(target=self.inference_worker)
+        # self.inference_thread.start()
         
         # 使用定时器定时保存图像，每0.05秒保存一次
         self.timer = rospy.Timer(rospy.Duration(DT), self.timer_callback)
@@ -106,6 +104,17 @@ class DataRecorder:
             )
             self.camera_threads[cam_name].start()
     
+    def inference_worker(self):
+        while True:
+            frames = self.frame_queue.get()
+            if frames is None:
+                break
+            rgb_frame, depth_aligned = frames
+            pred_depth = self.d3roma.infer_with_rgb_raw(rgb_frame, depth_aligned)
+            # 转化为点云数据
+            self.cloud_raw, self.cloud_raw_points, self.cloud_raw_colors = self.camera.create_point_cloud(rgb_frame, depth_aligned)
+            self.cloud_pred, self.cloud_pred_points, self.cloud_pred_colors = self.camera.create_point_cloud(rgb_frame, pred_depth)
+            
     def camera_worker(self, cam_name):
         while True:
             try:
@@ -115,36 +124,32 @@ class DataRecorder:
                 # 获取特定相机的RGB-D图像
                 rgb_frame, depth_aligned = self.cameras[cam_name].get_rgbd_image()
                 
-                if cam_name == 'cam_right' or cam_name == 'cam_high':
-                    # D3RoMa处理
-                    if cam_name == 'cam_right':
-                        pred_depth = self.d3roma_right.infer_with_rgb_raw(rgb_frame, depth_aligned) #单独运行0.38s,一起运行0.76s
-                    else:
-                        pred_depth = self.d3roma_high.infer_with_rgb_raw(rgb_frame, depth_aligned)  #单独运行0.38s,一起运行0.76s
-                    if cam_name == 'cam_right':
-                        extrinsics = self.cameras[cam_name].cam_right_extrinsics()
-                        # intrinsics = self.cameras[cam_name].cam_right_intrinsics()
-                        intrinsics = self.camera_config_right.K.arr
-                    else:
-                        extrinsics = self.cameras[cam_name].cam_high_extrinsics()
-                        # intrinsics = self.cameras[cam_name].cam_high_intrinsics()
-                        intrinsics = self.camera_config_high.K.arr
-                    
+                if cam_name == 'cam_right':
                     timestamp = time.time()
-                    self.cloud_raw[cam_name] = self.cameras[cam_name].rgbd_to_pointcloud(rgb_frame, depth_aligned, intrinsics, extrinsics, downsample_factor=1, 
+                    # D3RoMa处理
+                    pred_depth = self.d3roma.infer_with_rgb_raw(rgb_frame, depth_aligned)
+                    
+                    self.cloud_raw[cam_name] = self.cameras[cam_name].rgbd_to_pointcloud(rgb_frame, depth_aligned, self.camera_config.K.arr, downsample_factor=1, 
                             # fname=f"{self.output_dir}/raw_{timestamp}.ply"
                             )
-                    self.cloud_pred[cam_name] = self.cameras[cam_name].rgbd_to_pointcloud(rgb_frame, pred_depth, intrinsics, extrinsics, downsample_factor=1, 
+                    self.cloud_pred[cam_name] = self.cameras[cam_name].rgbd_to_pointcloud(rgb_frame, pred_depth, self.camera_config.K.arr, downsample_factor=1, 
                             # fname=f"{self.output_dir}/pred_{timestamp}.ply"
                             )
+                    
+                    # ros适配的点云格式 
+                    # raw_cloud_array = self.cameras[cam_name].merge_xyz_rgb(raw_pcd.points, raw_pcd.colors)
+                    
+                    # self.cloud_pred[cam_name] = self.cameras[cam_name].create_point_cloud(rgb_frame, pred_depth)
+                    # self.cloud_raw[cam_name] = self.cameras[cam_name].create_point_cloud(rgb_frame, depth_aligned)
                 
                 self.rgb_frames[cam_name] = rgb_frame
                 self.depth_aligned_frames[cam_name] = depth_aligned
+                
+                time.sleep(0.01)
             except Exception as e:
                 print(f"Error in camera worker for {cam_name}: {e}")
                 time.sleep(1)  # 出错时等待较长时间再重试
-                
-            
+        
     def make_file_path(self,dataset_dir,dataset_name,overwrite):
                 # saving dataset
         if not os.path.isdir(dataset_dir):
@@ -187,7 +192,7 @@ class DataRecorder:
         for cam_name in self.camera_serials.keys():
             self.record_data_dict[f'/observations/images/{cam_name}'] = []
             self.record_data_dict[f'/observations/depth_images/{cam_name}'] = []
-            if cam_name == 'cam_right' or cam_name == 'cam_high':
+            if cam_name == 'cam_right':
                 self.record_data_dict[f'/observations/pointcloud_pred/{cam_name}/xyz'] = []
                 self.record_data_dict[f'/observations/pointcloud_pred/{cam_name}/rgb'] = []
                 self.record_data_dict[f'/observations/pointcloud_raw/{cam_name}/xyz'] = []
@@ -196,9 +201,7 @@ class DataRecorder:
         print("record_data_dict",self.record_data_dict )
  
     def timer_callback(self, event):
-        # if self.cloud_pred['cam_right'] is None or self.cloud_raw['cam_right'] is None:
-        #     return
-        if self.cloud_pred['cam_high'] is None or self.cloud_raw['cam_high'] is None:
+        if self.cloud_pred['cam_right'] is None or self.cloud_raw['cam_right'] is None:
             return
         time1 = time.time()
         if self.is_collecting_data:
@@ -214,19 +217,16 @@ class DataRecorder:
                 # print(f"Joint positions: {joint_positions}")
 
                 # 获取手指状态
-                # fingers_status = self.modbus_client.get_finger_status()
-                # norm_fingers_status = [finger_status/100.0 for finger_status in fingers_status]
+                fingers_status = self.modbus_client.get_finger_status()
+                norm_fingers_status = [finger_status/100.0 for finger_status in fingers_status]
                 # obs['qpos'] = list(joint_positions[:6]) + list(norm_fingers_status[:6])
-                obs['qpos'] = list(joint_positions[:6]) + list(self.right_action_gripper_msg.data[:6])
-                # obs['qpos'] = list(joint_positions[:6]) + list([0]*6)
+                obs['qpos'] = list(joint_positions[:6]) + list([0]*6)
                 
                 # print(f"Finger status: {fingers_status}")
                 # print(f"Norm Finger status: {norm_fingers_status}")
                 
                 # obs['action'] = list(joint_positions[:6]) + list(norm_fingers_status[:6])
-                obs['action'] = list(joint_positions[:6]) + list(self.right_action_gripper_msg.data[:6])
-                
-                # obs['action'] = list(joint_positions[:6]) + list([0]*6)
+                obs['action'] = list(joint_positions[:6]) + list([0]*6)
                 
                 #print(f"gripper:{gripper}")
                 obs['images'] ={}
@@ -242,7 +242,7 @@ class DataRecorder:
                     cloud_pred = self.cloud_pred[cam_name]
                     cloud_raw = self.cloud_raw[cam_name]
                     
-                    if cam_name == 'cam_right' or cam_name == 'cam_high':
+                    if cam_name == 'cam_right':
                         # 提取xyz和rgb数据
                         cloud_pred_xyz = np.asarray(cloud_pred.points, dtype=np.float32)
                         cloud_pred_rgb = self.cameras[cam_name].open3d_rgb_to_rgb_packed(cloud_pred.colors)
@@ -253,14 +253,24 @@ class DataRecorder:
                         cloud_pred_xyz = self.transform_camera_to_base_frame(cloud_pred_xyz)
                         cloud_raw_xyz = self.transform_camera_to_base_frame(cloud_raw_xyz)    
 
-                        if self.debug:
-                            # 发布点云数据到ROS话题
-                            cloud_array = self.cameras[cam_name].merge_xyz_rgb(cloud_raw.points, cloud_raw.colors)
-                            pointcloud_msg = ros_numpy.point_cloud2.array_to_pointcloud2(
-                                # cloud_array, rospy.Time.now(), "cam_right_color_optical_frame"
-                                cloud_array, rospy.Time.now(), "base_link"
-                            )
-                            self.pub_raw.publish(pointcloud_msg)  
+                        # 发布点云数据到ROS话题
+                        cloud_array = self.cameras[cam_name].merge_xyz_rgb(cloud_raw.points, cloud_raw.colors)
+                        pointcloud_msg = ros_numpy.point_cloud2.array_to_pointcloud2(
+                            # cloud_array, rospy.Time.now(), "cam_right_color_optical_frame"
+                            cloud_array, rospy.Time.now(), "base_link"
+                        )
+                        self.pub_raw.publish(pointcloud_msg)  
+                        
+                        # # 降采样
+                        # if len(transformed_xyz) > 8192:
+                        #     sampling_idx = fpsample.bucket_fps_kdline_sampling(
+                        #         transformed_xyz, 
+                        #         n_samples=8192, 
+                        #         h=5
+                        #     )
+                        #     transformed_xyz = transformed_xyz[sampling_idx]
+                        #     rgb = rgb[sampling_idx]
+                        
                         
                         timestamp = time.time()
                         # 保存原始点云可视化
@@ -270,7 +280,12 @@ class DataRecorder:
                         # 保存预测点云可视化
                         # vis_path_pred = os.path.join(self.output_dir, f'pred_cloud_{timestamp}.png')
                         # self.visualize_pointcloud(cloud_pred_xyz, cloud_pred_rgb, vis_path_pred)
-
+        
+                        
+                        
+                        # 工作区裁减和NAN值滤除
+                        # pred_xyz, pred_rgb = self.filter_pointcloud(cloud_pred_xyz, cloud_pred_rgb)
+                        # raw_xyz, raw_rgb = self.filter_pointcloud(cloud_raw_xyz, cloud_raw_rgb)
                         # 将点云以图片可视化
                         # vis_path_raw_filtered = os.path.join(self.output_dir, f'raw_cloud_filtered_{timestamp}.png')
                         # self.visualize_pointcloud(raw_xyz, raw_rgb, vis_path_raw_filtered)                        
@@ -310,7 +325,7 @@ class DataRecorder:
             # 记录点云数据
             for cam_name in self.camera_serials:
                 # 只记录一个全局相机点云
-                if cam_name == 'cam_right' or cam_name == 'cam_high':
+                if cam_name == 'cam_right':
                     # 记录预测点云数据
                     self.record_data_dict[f'/observations/pointcloud_pred/{cam_name}/xyz'].append(
                         obs['pointcloud_pred'][cam_name]['xyz'])
@@ -351,7 +366,84 @@ class DataRecorder:
         # 应用变换
         transformed_xyz = xyz @ transform.T
         return transformed_xyz
+    
+    def visualize_pointcloud(self, xyz, rgb, output_path, views=[(0, 0), (0, 90), (90, 0)]):
+        """
+        将点云数据可视化为多视角图片并保存
+        Args:
+            xyz: 点云坐标，shape (N, 3)
+            rgb: 点云颜色，shape (N, 3)
+            output_path: 输出图片路径
+            views: 视角列表，每个元素为(elevation, azimuth)
+        """
+        import matplotlib.pyplot as plt
+        from mpl_toolkits.mplot3d import Axes3D
         
+        # 确保RGB值在0-1范围内
+        if rgb.max() > 1.0:
+            rgb = rgb.astype(float) / 255.0
+        
+        # 创建子图，每个视角一个
+        fig = plt.figure(figsize=(5*len(views), 5))
+        
+        for i, (elev, azim) in enumerate(views):
+            ax = fig.add_subplot(1, len(views), i+1, projection='3d')
+            
+            # 绘制点云
+            scatter = ax.scatter(xyz[:, 0], xyz[:, 1], xyz[:, 2],
+                            c=rgb,
+                            s=1)  # 点的大小
+            
+            # 设置视角
+            ax.view_init(elev=elev, azim=azim)
+            
+            # 设置轴标签
+            ax.set_xlabel('X')
+            ax.set_ylabel('Y')
+            ax.set_zlabel('Z')
+            
+            # 设置标题
+            ax.set_title(f'View: elev={elev}, azim={azim}')
+            
+            # 设置坐标轴范围（可选）
+            # ax.set_xlim([-1, 1])
+            # ax.set_ylim([-1, 1])
+            # ax.set_zlim([0, 2])
+        
+        plt.tight_layout()
+        plt.savefig(output_path, dpi=300, bbox_inches='tight')
+        plt.close()
+    
+    # 添加点云过滤函数
+    def filter_pointcloud(self, xyz, rgb):
+        """
+        对点云进行工作区裁减和NAN值滤除
+        Args:
+            xyz: 点云坐标，shape (N, 3)
+            rgb: 点云颜色，shape (N, 3)
+        Returns:
+            filtered_xyz, filtered_rgb: 过滤后的点云数据
+        """
+        # 1. NAN值滤除
+        valid_mask = ~np.isnan(xyz).any(axis=1)
+        xyz = xyz[valid_mask]
+        rgb = rgb[valid_mask]
+        
+        # 2. 工作区裁减
+        WORKSPACE_MIN = np.array([-1.1, -0.5, 0])    # 根据实际工作区调整
+        WORKSPACE_MAX = np.array([-0.3, 0.5, 0.3])   # 根据实际工作区调整
+        
+        x_mask = (xyz[:, 0] >= WORKSPACE_MIN[0]) & (xyz[:, 0] <= WORKSPACE_MAX[0])
+        y_mask = (xyz[:, 1] >= WORKSPACE_MIN[1]) & (xyz[:, 1] <= WORKSPACE_MAX[1])
+        # z_mask = (xyz[:, 2] >= WORKSPACE_MIN[2]) & (xyz[:, 2] <= WORKSPACE_MAX[2])
+        
+        workspace_mask = x_mask & y_mask #& z_mask
+        filtered_xyz = xyz[workspace_mask]
+        filtered_rgb = rgb[workspace_mask]
+        
+        return filtered_xyz, filtered_rgb
+    
+            
     def save_succ(self):
         try:
             if len(self.record_data_dict['/observations/qpos']) >= self.max_timesteps:
@@ -410,9 +502,9 @@ class DataRecorder:
         print("depth_images成功保存文件到数组")
         
         # 点云数据填充（预测点云和原始点云）
-        camera_names_pcl = ['cam_high'] #'cam_right', 
         for point_cloud_type in ['pred', 'raw']:
             pcd_data = {}
+            camera_names_pcl = ['cam_right']
             for cam_name in camera_names_pcl:
                 pcd_buffer = {
                     'xyz': data_dict[f'/observations/pointcloud_{point_cloud_type}/{cam_name}/xyz'],
@@ -479,13 +571,14 @@ class DataRecorder:
                 depth_data = data_dict[f'/observations/depth_images/{cam_name}']
                 print(f"Saving depth data for {cam_name}, shape: {depth_data.shape}")
                 _ = depth_image.create_dataset(cam_name, data=depth_data, dtype='float32',
-                                                chunks=(1, 360, 640), compression="gzip") #两种写法都可以
+                                                chunks=(1, 360, 640), compression="gzip")
                 # _ = depth_image.create_dataset(cam_name, (max_timesteps, 360, 640), dtype='float32',
-                #                           chunks=(1, 360, 640), compression="gzip")  # 可选：使用无损压缩
+                #                           chunks=(1, 360, 640), compression="gzip")  # 可选：使用无损压缩)
             
             # 创建并保存点云数据
             for point_cloud_type in ['pred', 'raw']:
                 pointcloud = obs.create_group(f'pointcloud_{point_cloud_type}')
+                camera_names_pcl = ['cam_right']
                 for cam_name in camera_names_pcl:
                     xyz_list = data_dict[f'/observations/pointcloud_{point_cloud_type}/{cam_name}/xyz']
                     rgb_list = data_dict[f'/observations/pointcloud_{point_cloud_type}/{cam_name}/rgb']
@@ -499,6 +592,7 @@ class DataRecorder:
                     #     )
                     #     self.visualize_pointcloud(xyz_list[frame_idx], rgb_list[frame_idx], vis_path)
             
+                    
                     cam_group = pointcloud.create_group(cam_name)
                     _ = cam_group.create_dataset('xyz', 
                         data=data_dict[f'/observations/pointcloud_{point_cloud_type}/{cam_name}/xyz'])
@@ -506,7 +600,7 @@ class DataRecorder:
                         data=data_dict[f'/observations/pointcloud_{point_cloud_type}/{cam_name}/rgb'])
                     _ = cam_group.create_dataset('padding_mask', 
                         data=data_dict[f'/observations/pointcloud_{point_cloud_type}/{cam_name}/padding_mask'])
-                    print(f"Saving pointcloud_{point_cloud_type}/{cam_name}")
+                    print(f"pointcloud_{point_cloud_type}/{cam_name} 成功保存文件到数组")
                     
             # 创建并保存其他数据
             _ = obs.create_dataset('qpos', (max_timesteps, 12))
@@ -526,7 +620,6 @@ class DataRecorder:
                 if 'depth_images' in name:
                     # 确保深度数据的形状正确
                     root[name][...] = array.reshape(max_timesteps, 360, 640)
-                    # continue
                 else:
                     root[name][...] = array
                 

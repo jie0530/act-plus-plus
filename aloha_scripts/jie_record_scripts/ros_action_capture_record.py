@@ -17,7 +17,7 @@ def main():
     rospy.init_node('ros_action_capture_record_node', anonymous=True)
     t1 = rospy.Time.now()
     print("开始采集")
-    recorder,max_t = ros_record_data.get_recorder("aloha_pick_fruit10")
+    recorder,max_t = ros_record_data.get_recorder("aloha_pick_trans_bottle")
     # rospy.Subscriber("/stop_collection", Int32, callback)
 
     # 循环，每次重新开始收集

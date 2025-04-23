@@ -8,12 +8,23 @@ TASK_CONFIGS = {
     'aloha_pick_fruit10':{
         'dataset_dir': DATA_DIR + '/aloha_pick_fruit10',
         'train_ratio': 0.92,
-        'episode_len': 160,
+        'episode_len': 180,
         # 'camera_names': ['cam_high', 'cam_left', 'cam_right']
         'camera_names': {
-                        # 'cam_left':"236522072295",
-                        # 'cam_wrist':"236522071143",
-                        'cam_right':"236522072295"
+                        'cam_high':"915112071851",
+                        'cam_wrist':"236522071143",
+                        # 'cam_right':"236522072295"
+                        },
+    },            
+    'aloha_pick_trans_bottle':{
+        'dataset_dir': DATA_DIR + '/aloha_pick_trans_bottle',
+        'train_ratio': 0.92,
+        'episode_len': 180,
+        # 'camera_names': ['cam_high', 'cam_left', 'cam_right']
+        'camera_names': {
+                        'cam_high':"915112071851",
+                        'cam_wrist':"236522071143",
+                        # 'cam_right':"236522072295"
                         },
     },              
 }
@@ -30,8 +41,8 @@ TRANS_MIN, TRANS_MAX = np.array([-0.5, -0.5, 0]), np.array([0.5, 0.5, 1.0])
 MAX_GRIPPER_WIDTH = 0.11 # meter
 
 # workspace in camera coordinate
-WORKSPACE_MIN = np.array([-0.5, -0.5, 0])
-WORKSPACE_MAX = np.array([0.5, 0.5, 1.0])
+WORKSPACE_MIN = np.array([-0.9, -0.5, 0])
+WORKSPACE_MAX = np.array([-0.4, 0.5, 1.0])
 
 # camera intrinsic matrix
 CAM_INTRINSICS = np.array([604.988525390625, 604.2501831054688, 325.60302734375, 251.7237548828125]),

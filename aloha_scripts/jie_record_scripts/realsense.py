@@ -8,6 +8,8 @@ import open3d as o3d
 from record_constants import * 
 from scipy.spatial.transform import Rotation as R
 import cv2
+import fpsample
+import time
 import ros_numpy
 
 class RealSenseRGBDCamera:
@@ -82,11 +84,18 @@ class RealSenseRGBDCamera:
         depth_image = np.asanyarray(frameset.get_depth_frame().get_data()).astype(np.float32) / self.depth_scale
         return color_image, depth_image
     
+    # - Translation: [-0.819, -0.609, 0.463]
+    # - Rotation: in Quaternion [0.916, -0.011, -0.011, -0.401]
+    # rosrun tf tf_echo base_link cam_right_color_optical_frame
+    # - Translation: [-0.769, 0.426, 0.266]
+    # - Rotation: in Quaternion [0.067, 0.831, -0.552, 0.022]
     def transform_pointcloud(self,pcd):
         # 平移向量
-        translation = np.array([-0.769, 0.436, 0.265])
-        # 四元数
-        quaternion = np.array([0.031, 0.833, -0.553, -0.002])
+        # translation = np.array([-0.769, 0.426, 0.266])
+        # quaternion = np.array([0.067, 0.831, -0.552, 0.022])
+        
+        translation = np.array([-0.819, -0.609, 0.463])
+        quaternion = np.array([0.916, -0.011, -0.011, -0.401])
 
         # 使用 scipy 库将四元数转换为旋转矩阵
         rotation = R.from_quat(quaternion)
@@ -103,20 +112,36 @@ class RealSenseRGBDCamera:
         return transformed_pcd
     
     # rosrun tf2_ros static_transform_publisher -0.769 0.436 0.265 0.031 0.833 -0.553 -0.002 base_link cam_right_color_optical_frame     
-    def cam_extrinsic(self):
-        return np.array([[ -0.99807128,  0.04940125, -0.03759308, -0.769],
-                    [0.05382232,  0.38686651,  -0.92056367,  0.436     ],
-                    [-0.03093349,  -0.9208115,  -0.38877924,  0.265     ],
-                    [ 0.,          0.,          0.,          1.        ]])
+    # rosrun tf tf_echo base_link cam_high_color_optical_frame
+    # - Translation: [-0.819, -0.609, 0.463]
+    # - Rotation: in Quaternion [0.916, -0.011, -0.011, -0.401]
+    # rosrun tf tf_echo base_link cam_right_color_optical_frame
+    # - Translation: [-0.769, 0.426, 0.266]
+    # - Rotation: in Quaternion [0.067, 0.831, -0.552, 0.022]
+    def cam_right_extrinsics(self):
+        return np.array([[-0.99005637,  0.13560972, -0.0373951,  -0.769],
+                        [ 0.08704528,  0.38176114, -0.920153,    0.426],
+                        [-0.1105057,  -0.91425841, -0.38976923,  0.266],
+                        [ 0.,          0.,          0.,          1.]])
+    def cam_high_extrinsics(self):
+        return np.array([[0.99951605, -0.02897113, -0.01132888, -0.819],
+                        [-0.01132888, -0.67818786,  0.73480125, -0.609],
+                        [-0.02897113, -0.7343173,  -0.67818786,  0.463],
+                        [ 0.,          0.,          0.,          1.]])
     
-    
-    def cam_intrinsics(self):        
+    def cam_right_intrinsics(self):        
         return np.array([
             [604.988525390625, 0, 325.60302734375, 0],
             [0, 604.2501831054688, 251.7237548828125, 0],
             [0, 0, 1, 0]
         ])
         # return CAM_INTRINSICS
+    def cam_high_intrinsics(self):        
+        return np.array([
+            [611.8621215820312, 0, 313.69580078125, 0],
+            [0, 612.2326049804688, 244.58538818359375, 0],
+            [0, 0, 1, 0]
+        ])
     
     def open3d_rgb_to_rgb_packed(self, open3d_rgb):
         rgb = np.asarray(open3d_rgb)
@@ -134,7 +159,7 @@ class RealSenseRGBDCamera:
         color:np.ndarray, 
         depth:np.ndarray, 
         intrinsic:np.ndarray, 
-        # extrinsic:np.ndarray=np.eye(4), 
+        extrinsic:np.ndarray=np.eye(4), 
         downsample_factor:float=1,
         fname:str=None,
         voxel_size:float=0.005
@@ -160,14 +185,48 @@ class RealSenseRGBDCamera:
             intrinsic[0, 0] / downsample_factor, intrinsic[1, 1] / downsample_factor, 
             intrinsic[0, 2] / downsample_factor, intrinsic[1, 2] / downsample_factor)
         pcd = o3d.geometry.PointCloud.create_from_rgbd_image(rgbd_image, intrinsic_o3d) #, extrinsic=extrinsic)
-        if fname is not None:
-            o3d.io.write_point_cloud(fname, pcd)
+        # 原始点云点数
+        # original_point_count = len(pcd.points)
         pcd = pcd.voxel_down_sample(voxel_size) # 下采样
+        # 降采样后点云点数
+        # downsampled_point_count = len(pcd.points)
+
+        # print(f"原始点云点数: {original_point_count}")
+        # print(f"降采样后点云点数: {downsampled_point_count}")
         # 在保存点云前添加坐标系变换
-        pcd.transform(self.cam_extrinsic())
+        pcd.transform(extrinsic)
+       
+        points = np.array(pcd.points).astype(np.float32)
+        colors = np.array(pcd.colors).astype(np.float32)
+
+        WORKSPACE_MIN = np.array([-0.95, -0.6, 0])
+        WORKSPACE_MAX = np.array([-0.3, 0.4, 0.45])
+
+        x_mask = ((points[:, 0] >= WORKSPACE_MIN[0]) & (points[:, 0] <= WORKSPACE_MAX[0]))
+        y_mask = ((points[:, 1] >= WORKSPACE_MIN[1]) & (points[:, 1] <= WORKSPACE_MAX[1]))
+        z_mask = ((points[:, 2] >= WORKSPACE_MIN[2]) & (points[:, 2] <= WORKSPACE_MAX[2]))
+        mask = (x_mask & y_mask & z_mask)
+        points = points[mask]
+        colors = colors[mask]
+        
+        # 降采样时间在0.006秒左右
+        # if len(points) > 4096:
+        #     sampling_idx = fpsample.bucket_fps_kdline_sampling(
+        #         points, 
+        #         n_samples=4096, 
+        #         h=5
+        #     )
+        #     points = points[sampling_idx]
+        #     colors = colors[sampling_idx]
+        
+        # 显示裁剪后的点云
+        pcd_crop = o3d.geometry.PointCloud()
+        pcd_crop.points = o3d.utility.Vector3dVector(points)
+        pcd_crop.colors = o3d.utility.Vector3dVector(colors)
+        
         if fname is not None:
-            o3d.io.write_point_cloud(fname, pcd)
-        return pcd 
+            o3d.io.write_point_cloud(fname, pcd_crop)
+        return pcd_crop 
     
     
     def create_point_cloud(self, colors, depths, voxel_size = 0.005):
@@ -220,6 +279,53 @@ class RealSenseRGBDCamera:
         cloud_final = np.concatenate([points, colors], axis = -1).astype(np.float32)
         return cloud_final
     
+
+    def visualize_pointcloud(self, xyz, rgb, output_path, views=[(0, 0), (0, 90), (90, 0)]):
+        """
+        将点云数据可视化为多视角图片并保存
+        Args:
+            xyz: 点云坐标，shape (N, 3)
+            rgb: 点云颜色，shape (N, 3)
+            output_path: 输出图片路径
+            views: 视角列表，每个元素为(elevation, azimuth)
+        """
+        import matplotlib.pyplot as plt
+        from mpl_toolkits.mplot3d import Axes3D
+        
+        # 确保RGB值在0-1范围内
+        if rgb.max() > 1.0:
+            rgb = rgb.astype(float) / 255.0
+        
+        # 创建子图，每个视角一个
+        fig = plt.figure(figsize=(5*len(views), 5))
+        
+        for i, (elev, azim) in enumerate(views):
+            ax = fig.add_subplot(1, len(views), i+1, projection='3d')
+            
+            # 绘制点云
+            scatter = ax.scatter(xyz[:, 0], xyz[:, 1], xyz[:, 2],
+                            c=rgb,
+                            s=1)  # 点的大小
+            
+            # 设置视角
+            ax.view_init(elev=elev, azim=azim)
+            
+            # 设置轴标签
+            ax.set_xlabel('X')
+            ax.set_ylabel('Y')
+            ax.set_zlabel('Z')
+            
+            # 设置标题
+            ax.set_title(f'View: elev={elev}, azim={azim}')
+            
+            # 设置坐标轴范围（可选）
+            # ax.set_xlim([-1, 1])
+            # ax.set_ylim([-1, 1])
+            # ax.set_zlim([0, 2])
+        
+        plt.tight_layout()
+        plt.savefig(output_path, dpi=300, bbox_inches='tight')
+        plt.close()
 
     def xyz_rpy_to_homogeneous_matrix(self, xyz, rpy):
         """

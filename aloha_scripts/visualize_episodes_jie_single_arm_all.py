@@ -95,19 +95,61 @@ def load_hdf5(dataset_dir, dataset_name):
             image_dict[cam_name] = image_list
             
         # 只在有深度图像数据时进行解压
-        if depth_image_dict and depth_compress_len is not None:
-            for cam_id, cam_name in enumerate(depth_image_dict.keys()):
-                # un-pad and uncompress
-                padded_compressed_image_list = depth_image_dict[cam_name]
-                depth_image_list = []
-                for frame_id, padded_compressed_image in enumerate(padded_compressed_image_list): # [:1000] to save memory
-                    depth_image_len = int(depth_compress_len[cam_id, frame_id])
-                    depth_compressed_image = padded_compressed_image
-                    depth_image = cv2.imdecode(depth_compressed_image, 1)
-                    depth_image_list.append(depth_image)
-                depth_image_dict[cam_name] = depth_image_list
-
+        # if depth_image_dict and depth_compress_len is not None:
+        #     for cam_id, cam_name in enumerate(depth_image_dict.keys()):
+        #         # un-pad and uncompress
+        #         padded_compressed_image_list = depth_image_dict[cam_name]
+        #         depth_image_list = []
+        #         for frame_id, padded_compressed_image in enumerate(padded_compressed_image_list): # [:1000] to save memory
+        #             depth_image_len = int(depth_compress_len[cam_id, frame_id])
+        #             depth_compressed_image = padded_compressed_image
+        #             depth_image = cv2.imdecode(depth_compressed_image, 1)
+        #             depth_image_list.append(depth_image)      
+        #         depth_image_dict[cam_name] = depth_image_list
+        # 深度图像处理 - 直接读取float32数据并转换为可视化格式
+        if depth_image_dict:
+            for cam_name in depth_image_dict.keys():
+                depth_frames = depth_image_dict[cam_name]  # 形状应该是 (n_frames, 360, 640)
+                
+                # 转换为可视化格式
+                visualized_depth_list = []
+                for depth_frame in depth_frames:
+                    # 对深度值进行归一化，转换为可视化格式
+                    depth_colormap = visualize_depth(depth_frame)
+                    visualized_depth_list.append(depth_colormap)
+                
+                depth_image_dict[cam_name] = visualized_depth_list
     return qpos, effort, action, image_dict, depth_image_dict, pcd_data_dict
+
+# 添加深度图像可视化函数
+def visualize_depth(depth_image):
+    """
+    将深度图转换为彩色可视化图像
+    Args:
+        depth_image: float32类型的深度图，形状为(360, 640)
+    Returns:
+        colored_depth: uint8类型的彩色图像，形状为(360, 640, 3)
+    """
+    # 移除无效值（可选）
+    valid_mask = ~np.isnan(depth_image)
+    if valid_mask.any():
+        min_val = np.min(depth_image[valid_mask])
+        max_val = np.max(depth_image[valid_mask])
+    else:
+        min_val = 0
+        max_val = 1
+    
+    # 归一化到0-255范围
+    depth_normalized = np.zeros_like(depth_image)
+    depth_normalized[valid_mask] = ((depth_image[valid_mask] - min_val) / (max_val - min_val) * 255).astype(np.uint8)
+    
+    # 应用颜色映射
+    colored_depth = cv2.applyColorMap(depth_normalized.astype(np.uint8), cv2.COLORMAP_JET)
+    
+    # 将无效区域设置为黑色（可选）
+    colored_depth[~valid_mask] = 0
+    
+    return colored_depth
 
 def main(args):
     dataset_dir = args['dataset_dir']
@@ -129,16 +171,25 @@ def main(args):
             print(f"Visualizing dataset: {dataset_name}")
             # data_path_complete = True
             qpos, effort, action, image_dict, depth_image_dict, pcd_data_dict = load_hdf5(dataset_dir, dataset_name)
-            save_videos(image_dict, DT, video_path=os.path.join(vis_data_dir, dataset_name + '_video.mp4'))
+            save_videos(image_dict, DT, video_path=os.path.join(vis_data_dir, dataset_name + '_video.mp4'), is_depth=False)
             if depth_image_dict:  # 只在有深度图像数据时保存
-                save_videos(depth_image_dict, DT, video_path=os.path.join(vis_data_dir, dataset_name + '_depth_video.mp4'))
+                save_videos(depth_image_dict, DT, video_path=os.path.join(vis_data_dir, dataset_name + '_depth_video.mp4'), is_depth=True)
             visualize_joints(qpos, action, plot_path=os.path.join(vis_data_dir, dataset_name + '_qpos.png'))
             if pcd_data_dict:
-                # Decompress point cloud data
-                for cam_name in pcd_data_dict.keys():
-                    decompressed_pcd = decompress_pointcloud(pcd_data_dict[cam_name])
+                for point_cloud_type in ['pred', 'raw']:
+                    for cam_name in pcd_data_dict[point_cloud_type].keys():
+                        decompressed_pcd = decompress_pointcloud(pcd_data_dict[point_cloud_type][cam_name])
                     # Save point cloud video
-                    save_pointcloud_video(decompressed_pcd, os.path.join(vis_data_dir, dataset_name + '_' + cam_name + '_pcd_video.mp4'))
+                    save_pointcloud_video(decompressed_pcd, DT, os.path.join(vis_data_dir, dataset_name + '_' + point_cloud_type + '_' + cam_name + '_pcd_video.mp4'))
+    # elif args['seq']:
+    #     #可视化序列之间的数据集
+    #     seq_idx = args['seq_idx']
+    #     seq_dir = os.path.join(dataset_dir, f'seq_{seq_idx}')
+    #     dataset_names = [f for f in os.listdir(seq_dir) if f.endswith('.hdf5')]  # Assuming datasets are in .hdf5 format
+    #     print(f"Visualizing datasets: {dataset_names}")
+    #     for dataset_name in dataset_names:
+    #         dataset_name = dataset_name.rsplit('.', 1)[0]
+    #         print(f"Visualizing dataset: {dataset_name}")
     else:
         episode_idx = args['episode_idx']
         ismirror = args['ismirror']
@@ -159,7 +210,7 @@ def main(args):
                 for cam_name in pcd_data_dict[point_cloud_type].keys():
                     decompressed_pcd = decompress_pointcloud(pcd_data_dict[point_cloud_type][cam_name])
                     # Save point cloud video
-                    save_pointcloud_video(decompressed_pcd, os.path.join(vis_data_dir, dataset_name + '_' + point_cloud_type + '_' + cam_name + '_pcd_video.mp4'))
+                    save_pointcloud_video(decompressed_pcd, DT, os.path.join(vis_data_dir, dataset_name + '_' + point_cloud_type + '_' + cam_name + '_pcd_video.mp4'))
         # visualize_single(effort, 'effort', plot_path=os.path.join(dataset_dir, dataset_name + '_effort.png'))
         # visualize_single(action - qpos, 'tracking_error', plot_path=os.path.join(dataset_dir, dataset_name + '_error.png'))
         # visualize_base(base_action, plot_path=os.path.join(dataset_dir, dataset_name + '_base_action.png'))
@@ -175,22 +226,23 @@ def decompress_pointcloud(pcd_data):
     decompressed_pcd = {'xyz': decompressed_xyz, 'rgb': decompressed_rgb}
     return decompressed_pcd
 
-def save_pointcloud_video(pcd_data, video_path, fps=30):
+def save_pointcloud_video(pcd_data, dt=0.05, video_path=None):
+    fps = int(1/dt)
     fourcc = cv2.VideoWriter_fourcc(*'mp4v')
-    out = cv2.VideoWriter(video_path, fourcc, fps, (640, 480))  # Adjust resolution as needed
+    out = cv2.VideoWriter(video_path, fourcc, fps, (640, 360))  # Adjust resolution as needed
     # TODO: 下采样
     for i in range(len(pcd_data['xyz'])): # len(pcd_data['xyz'])
         xyz = pcd_data['xyz'][i]
         rgb = pcd_data['rgb'][i]
-        img = np.zeros((480, 640, 3), dtype=np.uint8)  # Create a blank image
+        img = np.zeros((360, 640, 3), dtype=np.uint8)  # Create a blank image
 
         # Convert point cloud to image
         for j in range(len(xyz)):
             x, y, z = xyz[j]
             r, g, b = rgb[j]
             # Map 3D points to 2D image plane (simple projection)
-            u, v = int(x * 100 + 320), int(y * 100 + 240)  # Adjust scaling and offset
-            if 0 <= u < 640 and 0 <= v < 480:
+            u, v = int(x * 100 + 320), int(y * 100 + 180)  # Adjust scaling and offset
+            if 0 <= u < 640 and 0 <= v < 360:
                 img[v, u] = (b, g, r)  # OpenCV uses BGR format
 
         out.write(img)
@@ -198,21 +250,32 @@ def save_pointcloud_video(pcd_data, video_path, fps=30):
     out.release()
     print(f'Saved point cloud video to: {video_path}')
 
-
-
-def save_videos(video, dt, video_path=None):
+def save_videos(video, dt, video_path=None, is_depth=False):
+    """
+    保存视频，支持RGB图像和深度图像
+    Args:
+        video: 视频数据，可以是list或dict格式
+        dt: 时间间隔
+        video_path: 保存路径
+        is_depth: 是否是深度图像数据
+    """
     if isinstance(video, list):
         cam_names = list(video[0].keys())
-        h, w, _ = video[0][cam_names[0]].shape
+        h, w = video[0][cam_names[0]].shape[:2]
         w = w * len(cam_names)
         fps = int(1/dt)
         out = cv2.VideoWriter(video_path, cv2.VideoWriter_fourcc(*'mp4v'), fps, (w, h))
+        
         for ts, image_dict in enumerate(video):
             images = []
             for cam_name in cam_names:
                 image = image_dict[cam_name]
-                image = image[:, :, [2, 1, 0]] # swap B and R channel
-                images.append(image)
+                if is_depth:
+                    # 深度图已经在load_hdf5中转换为彩色图像
+                    images.append(image)
+                else:
+                    image = image[:, :, [2, 1, 0]]  # swap B and R channel
+                    images.append(image)
             images = np.concatenate(images, axis=1)
             out.write(images)
         out.release()
@@ -221,19 +284,19 @@ def save_videos(video, dt, video_path=None):
         cam_names = list(video.keys())
         all_cam_videos = []
         for cam_name in cam_names:
-            all_cam_videos.append(video[cam_name])
-        all_cam_videos = np.concatenate(all_cam_videos, axis=2) # width dimension
+            all_cam_videos.append(video[cam_name])      
+        all_cam_videos = np.concatenate(all_cam_videos, axis=1)  # width dimension
 
         n_frames, h, w, _ = all_cam_videos.shape
         fps = int(1 / dt)
         out = cv2.VideoWriter(video_path, cv2.VideoWriter_fourcc(*'mp4v'), fps, (w, h))
         for t in range(n_frames):
             image = all_cam_videos[t]
-            image = image[:, :, [2, 1, 0]]  # swap B and R channel
+            if not is_depth:
+                image = image[:, :, [2, 1, 0]]  # swap B and R channel
             out.write(image)
         out.release()
         print(f'Saved video to: {video_path}')
-
 
 def visualize_joints(qpos_list, command_list, plot_path=None, ylim=None, label_overwrite=None):
     if label_overwrite:
