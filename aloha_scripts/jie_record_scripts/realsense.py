@@ -210,10 +210,10 @@ class RealSenseRGBDCamera:
         colors = colors[mask]
         
         # 降采样时间在0.006秒左右
-        # if len(points) > 4096:
+        # if len(points) > 23000:
         #     sampling_idx = fpsample.bucket_fps_kdline_sampling(
         #         points, 
-        #         n_samples=4096, 
+        #         n_samples=23000, 
         #         h=5
         #     )
         #     points = points[sampling_idx]

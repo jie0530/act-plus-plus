@@ -13,138 +13,127 @@ from sensor_msgs.msg import PointCloud2
 import ros_numpy
 from typing import Dict, Optional
 from functools import partial
-from utils import get_xyz_points
-def fix_image(cv_image,cv_type=cv2.COLOR_BGR2RGB,target_height = 480,target_width = 640):
-    # 将图像从BGR转换为RGB
-    cv_image_rgb = cv_image
-    if cv_type:
-        cv_image_rgb = cv2.cvtColor(cv_image, cv_type)
-    
-    # 获取图像尺寸
-    height, width = cv_image_rgb.shape[:2] 
-    
-    # 调整图像尺寸
-    if height > target_height or width > target_width:
-        # 图像太大，需要裁剪
-        startx = width//2 - target_width//2
-        starty = height//2 - target_height//2    
-        cv_image_rgb = cv_image_rgb[starty:starty+target_height, startx:startx+target_width]
-    elif height < target_height or width < target_width:
-        # 图像太小，需要填充
-        delta_w = target_width - width
-        delta_h = target_height - height
-        top, bottom = delta_h//2, delta_h-(delta_h//2)
-        left, right = delta_w//2, delta_w-(delta_w//2)
-        color = [0, 0, 0] # 黑色填充
-        cv_image_rgb = cv2.copyMakeBorder(cv_image_rgb, top, bottom, left, right, cv2.BORDER_CONSTANT, value=color)
-    return cv_image_rgb
+import threading
+sys.path.append('/home/wsco/jie_ws/src/d3roma/')
+from inference_d3roma import D3RoMa
+from utils_d3roma.camera import Realsense
 
 class DataRecorder:
-    def __init__(self, camera_name_topic_dict, depth_camera_name_topic_dict):
-
-        # 定义了一个实例变量 joint_msg，并使用类型注解指定了该变量的类型应该是 JointState。类型注解帮助开发者理解变量预期的数据类型，虽然它不会在Python运行时强制类型检查。这里将 joint_msg 初始化为 None，意味着在收到任何关节状态消息前，这个变量没有具体的值
-        # self.joint_msg:JointState = None
-        # # setattr(self, 'joint_msg', msg) 是设置当前类实例的 joint_msg 属性为接收到的消息
-        # # 当 /frcobot/joint_states 话题上有新的 JointState 消息发布时，这个订阅者的回调函数会自动更新 self.joint_msg 的值为这个新消息。这是实现机器人软件组件之间通信的有效方式，特别是在需要实时响应外部传感器数据或状态信息时。
-        # self.joint_states_sub = rospy.Subscriber('/joint_states', JointState, lambda msg: setattr(self, 'joint_msg', msg))  
-        # # self.left_action_gripper_msg:Int32MultiArray = None
-        # # self.left_action_gripper_sub = rospy.Subscriber('/left_finger_status', Int32MultiArray, lambda msg: setattr(self, 'left_action_gripper_msg', msg))
-        # self.right_action_gripper_msg:Int32MultiArray = None
-        # self.right_action_gripper_sub = rospy.Subscriber('/right_finger_status', Int32MultiArray, lambda msg: setattr(self, 'right_action_gripper_msg', msg))
-
-        self.is_collecting_data = False
-
-        # 创建CV Bridge
-        self.bridge = CvBridge()
-        
-        # 订阅图像topic
-        self.image_shape = (480, 640, 3)
-        self.image_topics:dict = camera_name_topic_dict
-        self.image_sub = {}
-        self.image_buffer = {}
-        
-        # 订阅深度图像topic
-        self.depth_image_shape = (480, 640)
-        self.depth_image_topics:dict = depth_camera_name_topic_dict
-        self.depth_image_sub = {}
-        self.depth_image_buffer = {}
-        
-        # 订阅点云topic
-        self.point_cloud_data = None
-        self.point_cloud_sub = rospy.Subscriber('/fused_pcd', PointCloud2, self.pointcloud_callback)
-        rospy.wait_for_message('/fused_pcd', PointCloud2)
-        print("Subscribed to fused_pcd topic")
-
+    def __init__(self, camera_name_topic_dict, pcl_type):
+        self.pcl_type = pcl_type
         # 与机器人控制器建立连接，连接成功返回一个机器人对象
         self.robot = Robot.RPC('192.168.58.2')
-        self.robot.LoggerInit()
-        self.robot.SetLoggerLevel(4)
+        # self.robot.LoggerInit()
+        # self.robot.SetLoggerLevel(4)
         
+        # rospy.init_node('pointcloud_publisher', anonymous=True)
+        self.pub_raw = rospy.Publisher('raw_pcl', PointCloud2, queue_size=10)
+        self.pub_pred = rospy.Publisher('pred_pcl', PointCloud2, queue_size=10)
+
         # 实例化 ModbusClient 1是左手，2是右手
         self.modbus_client = ModbusClient(serial_port_name="/dev/ttyUSB0", slave_id=1)  # 替换为实际的串口名称
-
         # 连接设备
         if not self.modbus_client.connect():
             print("Failed to connect to Modbus device")
             return
 
-        # callback(data) 是 make_callback 返回的回调函数，它会在接收到图像消息时执行。
-        def make_callback(cam_name, bridge, image_buffer, image_shape):
-            def callback(data):
-                # print(f"Received image from {cam_name}")
-                try:
-                    # 将接收到的图像转换为OpenCV图像格式
-                    cv_image = bridge.imgmsg_to_cv2(data, "rgb8")
-                    image_buffer[cam_name] = (fix_image(cv_image, None, image_shape[0], image_shape[1]), data.header.stamp.to_sec())
-                except CvBridgeError as e:
-                    rospy.logerr(e)
-            return callback
-
-        for cam_name, cam_topic in self.image_topics.items():
-            self.image_buffer[cam_name] = None
-            # 使用make_callback函数创建callback
-            print(f"Subscribing to {cam_name} topic: {cam_topic}")
-            callback = make_callback(cam_name, self.bridge, self.image_buffer, self.image_shape)
-            self.image_sub[cam_name] = rospy.Subscriber(cam_topic, Image, callback)
-            print(f"Subscribed to {cam_name} topic: {cam_topic}")
-
-        def depth_make_callback(cam_name, bridge, depth_image_buffer, image_shape):
-            def depth_callback(data):
-                try:
-                    # 将接收到的图像转换为OpenCV图像格式
-                    depth_img = bridge.imgmsg_to_cv2(data, "32FC1")
-                    depth_image_buffer[cam_name] = (fix_image(depth_img, None, image_shape[0], image_shape[1]), data.header.stamp.to_sec())
-                except CvBridgeError as e:
-                    rospy.logerr(e)
-            return depth_callback
-
-        for cam_name, cam_topic in self.depth_image_topics.items():
-            self.depth_image_buffer[cam_name] = None
-            # 使用make_callback函数创建callback
-            depth_callback = depth_make_callback(cam_name, self.bridge, self.depth_image_buffer, self.depth_image_shape)
-            self.depth_image_sub[cam_name] = rospy.Subscriber(cam_topic, Image, depth_callback)
-            print(f"Subscribed to {cam_name} topic: {cam_topic}")
+        # 定义相机序列号映射
+        self.camera_serials = camera_name_topic_dict
+        
+        # 初始化多个RealSense相机
+        self.cameras = {}
+        # from aloha_scripts.jie_record_scripts.realsense import RealSenseRGBDCamera
+        sys.path.append('/home/wsco/jie_ws/src/act-plus-plus/aloha_scripts/jie_record_scripts/')
+        from realsense import RealSenseRGBDCamera
+        for cam_name, serial in self.camera_serials.items():
+            try:
+                self.cameras[cam_name] = RealSenseRGBDCamera(serial=serial)
+                # 预热相机
+                for _ in range(10):
+                    self.cameras[cam_name].get_rgbd_image()
+                print(f"Camera {cam_name} (Serial: {serial}) initialization finished.")
+            except Exception as e:
+                print(f"Failed to initialize camera {cam_name} (Serial: {serial}): {e}")
+        
+        # 为每个相机创建数据缓存
+        self.rgb_frames = {cam_name: None for cam_name in self.cameras}
+        self.depth_aligned_frames = {cam_name: None for cam_name in self.cameras}
+        self.cloud_pred = {cam_name: None for cam_name in self.cameras}
+        self.cloud_raw = {cam_name: None for cam_name in self.cameras}
+        
+        # 初始化D3RoMa
+        self.camera_config_right = Realsense.default_real("d435_right")
+        self.camera_config_high = Realsense.default_real("d435_high")
+        overrides = [
+            # uncomment if you choose variant left+right+raw
+            # "task=eval_ldm_mixed",
+            # "task.resume_pretrained=experiments/ldm_sf-mixed.dep4.lr3e-05.v_prediction.nossi.scaled_linear.randn.nossi.my_ddpm1000.SceneFlow_Dreds_HssdIsaacStd.180x320.cond7-raw+left+right.w0.0/epoch_0199",
             
- 
- 
-    def pointcloud_callback(self, pcd_msg: PointCloud2):
-        # self.point_cloud_data = {}
-        # stamp = pcd_msg.header.stamp.secs + pcd_msg.header.stamp.nsecs * 1e-9
-        pcd = ros_numpy.point_cloud2.pointcloud2_to_array(pcd_msg)
-        pcd_xyz, pcd_xyz_mask = get_xyz_points(pcd, remove_nans=True)
-        pcd = ros_numpy.point_cloud2.split_rgb_field(pcd)
-        pcd_rgb = np.zeros(pcd.shape + (3,), dtype=np.uint8)
-        pcd_rgb[..., 0] = pcd["r"]
-        pcd_rgb[..., 1] = pcd["g"]
-        pcd_rgb[..., 2] = pcd["b"]
-        pcd_rgb = pcd_rgb[pcd_xyz_mask]
-        self.point_cloud_data = {
-            "xyz": pcd_xyz,
-            "rgb": pcd_rgb,
-            # "stamp": np.array([stamp]),
-        }  
+            # uncomment if you choose variant rgb+raw
+            "task=eval_ldm_mixed_rgb+raw",
+            # "task.resume_pretrained=experiments/ldm_sf-241212.2.dep4.lr3e-05.v_prediction.nossi.scaled_linear.randn.ddpm1000.Dreds_HssdIsaacStd_ClearPose.180x320.rgb+raw.w0.0/epoch_0056",
+            "task.resume_pretrained=/home/wsco/jie_ws/src/d3roma/experiments/ldm/epoch_0056",
+            # rest of the configurations
+            "task.eval_num_batch=1",
+            "task.image_size=[360,640]", 
+            # "task.image_size=[180,320]",
+            "task.eval_batch_size=1",
+            "task.num_inference_rounds=1",
+            "task.num_inference_timesteps=5", "task.num_intermediate_images=1",
+            "task.write_pcd=true"
+        ]
+        self.d3roma_right = D3RoMa(overrides, self.camera_config_right, variant="rgb+raw")
+        self.d3roma_high = D3RoMa(overrides, self.camera_config_high, variant="rgb+raw")
+        
+        # 修改相机工作线程
+        self.camera_threads = {}
+        for cam_name in self.cameras:
+            self.camera_threads[cam_name] = threading.Thread(
+                target=self.camera_worker,
+                args=(cam_name,)
+            )
+            self.camera_threads[cam_name].start()
+    
+    def camera_worker(self, cam_name):
+        while True:
+            try:
+                # 获取特定相机的RGB-D图像
+                rgb_frame, depth_aligned = self.cameras[cam_name].get_rgbd_image()
+                
+                if cam_name == 'cam_right' or cam_name == 'cam_high':
+                    # D3RoMa处理
+                    if cam_name == 'cam_right':
+                        pred_depth = self.d3roma_right.infer_with_rgb_raw(rgb_frame, depth_aligned) #单独运行0.38s,一起运行0.76s
+                    else:
+                        pred_depth = self.d3roma_high.infer_with_rgb_raw(rgb_frame, depth_aligned)  #单独运行0.38s,一起运行0.76s
+                    if cam_name == 'cam_right':
+                        extrinsics = self.cameras[cam_name].cam_right_extrinsics()
+                        # intrinsics = self.cameras[cam_name].cam_right_intrinsics()
+                        intrinsics = self.camera_config_right.K.arr
+                    else:
+                        extrinsics = self.cameras[cam_name].cam_high_extrinsics()
+                        # intrinsics = self.cameras[cam_name].cam_high_intrinsics()
+                        intrinsics = self.camera_config_high.K.arr
+                    
+                    timestamp = time.time()
+                    if self.pcl_type == 'raw':
+                        self.cloud_raw[cam_name] = self.cameras[cam_name].rgbd_to_pointcloud(rgb_frame, depth_aligned, intrinsics, extrinsics, downsample_factor=1, 
+                                # fname=f"{self.output_dir}/raw_{timestamp}.ply"
+                                )
+                    else:
+                        self.cloud_pred[cam_name] = self.cameras[cam_name].rgbd_to_pointcloud(rgb_frame, pred_depth, intrinsics, extrinsics, downsample_factor=1, 
+                                # fname=f"{self.output_dir}/pred_{timestamp}.ply"
+                                )
+                
+                self.rgb_frames[cam_name] = rgb_frame
+                self.depth_aligned_frames[cam_name] = depth_aligned
+            except Exception as e:
+                print(f"Error in camera worker for {cam_name}: {e}")
+                time.sleep(1)  # 出错时等待较长时间再重试
+                
 
-    def _get_base_obs(self, include_joints=True, include_fingers=True, num_fingers=6, include_pcl=True):
+
+    def _get_base_obs(self, include_joints=True, include_fingers=True, num_fingers=6, pcl_type='raw'):
         """基础观测函数，处理共同的逻辑
         Args:
             include_joints: 是否包含关节数据
@@ -152,13 +141,19 @@ class DataRecorder:
             num_fingers: 需要的手指数量
             include_pcl: 是否包含点云数据
         """
-        if any(value is None for value in self.image_buffer.values()):
-            print("No images received yet")
-            return False
-
+        # if any(value is None for value in self.image_buffer.values()):
+        #     print("No images received yet")
+        #     return False
+        if pcl_type == 'raw':
+            if self.cloud_raw['cam_high'] is None:
+                print("No pcl received yet")
+                return
+        else:
+            if self.cloud_pred['cam_high'] is None:
+                print("No pcl received yet")
+                return
         obs = {'qpos': [], 'images': {}, 'depth_images': {}}
-        if include_pcl:
-            obs['pointcloud'] = {'xyz': [], 'rgb': []}
+        obs['pointcloud'] = {'xyz': [], 'rgb': []}
         
         # 获取关节位置
         if include_joints:
@@ -178,44 +173,51 @@ class DataRecorder:
             print(f"Finger status: {fingers_status}")
             print(f"Norm Finger status: {norm_fingers_status}")
 
-        try:
-            # 处理图像数据
-            for cam_name in self.image_topics.keys():
-                if self.image_buffer[cam_name][0].shape != self.image_shape:
-                    raise Exception(f"image shape {self.image_buffer[cam_name][0].shape} error, require {self.image_shape}")
-                obs['images'][cam_name] = self.image_buffer[cam_name][0]
-            
-            # 处理深度图像数据
-            for cam_name in self.depth_image_topics.keys():
-                if self.depth_image_buffer[cam_name][0].shape != self.depth_image_shape:
-                    raise Exception(f"image shape {self.depth_image_buffer[cam_name][0].shape} error, require {self.depth_image_shape}")
-                obs['depth_images'][cam_name] = self.depth_image_buffer[cam_name][0]
+        # 数据
+        cam_name = 'cam_high' #HardCode
+        # 提取点云xyz和rgb数据
+        if pcl_type == 'raw':
+            cloud_raw = self.cloud_raw[cam_name]
+            cloud_raw_xyz = np.asarray(cloud_raw.points, dtype=np.float32)
+            cloud_raw_rgb = self.cameras[cam_name].open3d_rgb_to_rgb_packed(cloud_raw.colors)
+            obs['pointcloud']['xyz'].extend(cloud_raw_xyz)
+            obs['pointcloud']['rgb'].extend(cloud_raw_rgb)
+        elif pcl_type == 'pred':
+            cloud_pred = self.cloud_pred[cam_name]
+            cloud_pred_xyz = np.asarray(cloud_pred.points, dtype=np.float32)
+            cloud_pred_rgb = self.cameras[cam_name].open3d_rgb_to_rgb_packed(cloud_pred.colors)
+            obs['pointcloud']['xyz'].extend(cloud_pred_xyz)
+            obs['pointcloud']['rgb'].extend(cloud_pred_rgb)
 
-            # 处理点云数据
-            if include_pcl:
-                if self.point_cloud_data is not None:
-                    obs['pointcloud']['xyz'].extend(self.point_cloud_data['xyz'])
-                    obs['pointcloud']['rgb'].extend(self.point_cloud_data['rgb'])
+        # try:
+            # # 处理图像数据
+            # for cam_name in self.image_topics.keys():
+            #     if self.image_buffer[cam_name][0].shape != self.image_shape:
+            #         raise Exception(f"image shape {self.image_buffer[cam_name][0].shape} error, require {self.image_shape}")
+            #     obs['images'][cam_name] = self.image_buffer[cam_name][0]
             
-        except Exception as e:
-            print(e)
-            return False
+            # # 处理深度图像数据
+            # for cam_name in self.depth_image_topics.keys():
+            #     if self.depth_image_buffer[cam_name][0].shape != self.depth_image_shape:
+            #         raise Exception(f"image shape {self.depth_image_buffer[cam_name][0].shape} error, require {self.depth_image_shape}")
+            #     obs['depth_images'][cam_name] = self.depth_image_buffer[cam_name][0]
+        # except Exception as e:
+        #     print(e)
+        #     return False
             
         return obs
 
-    def get_obs(self, include_pcl=True):  # action_dim=12
-        return self._get_base_obs(include_joints=True, include_fingers=True, num_fingers=6, include_pcl=include_pcl)
+    def get_obs(self, pcl_type='raw'):  # action_dim=12
+        return self._get_base_obs(include_joints=True, include_fingers=True, num_fingers=6)
 
-    def get_obs_arm_gripper(self, include_pcl=True):  # action_dim=7
-        return self._get_base_obs(include_joints=True, include_fingers=True, num_fingers=1, include_pcl=include_pcl)
+    def get_obs_arm_gripper(self, pcl_type='raw'):  # action_dim=7
+        return self._get_base_obs(include_joints=True, include_fingers=True, num_fingers=1, pcl_type=pcl_type)
 
-    def get_obs_arm(self, include_pcl=True):  # action_dim=6
-        return self._get_base_obs(include_joints=True, include_fingers=False, include_pcl=include_pcl)
+    def get_obs_arm(self, pcl_type='raw'):  # action_dim=6
+        return self._get_base_obs(include_joints=True, include_fingers=False)
 
-    def get_obs_hand(self, include_pcl=True):  # action_dim=6
-        return self._get_base_obs(include_joints=False, include_fingers=True, num_fingers=6, include_pcl=include_pcl)
-    
-    
+    def get_obs_hand(self, pcl_type='raw'):  # action_dim=6
+        return self._get_base_obs(include_joints=False, include_fingers=True, num_fingers=6)
 
     def control_finger(self, action_list):
         int_action_list = [int(i * 100) if 0 <= i <= 100 else 0 for i in action_list] # 手指动作恢复到原来的比例

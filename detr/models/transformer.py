@@ -47,67 +47,33 @@ class Transformer(nn.Module):
                 nn.init.xavier_uniform_(p)
 
     def forward(self, src, mask, query_embed, pos_embed, latent_input=None, proprio_input=None, 
-                additional_pos_embed=None, pcl_input=None, depth_src=None, depth_pos_embed=None):
+                additional_pos_embed=None):
         """
+        处理点云输入的transformer前向传播
         Args:
-            src: RGB图像特征 [bs, c, h, w]
-            depth_src: 深度图特征 [bs, c, h, w]
-            depth_pos_embed: 深度图位置编码
+            src: 点云特征 [seq_len, bs, dim]
+            mask: 注意力mask
+            query_embed: 查询嵌入
+            pos_embed: 点云位置编码 [seq_len, bs, dim]
+            latent_input: 潜变量输入 [bs, dim]
+            proprio_input: 机器人状态输入 [bs, dim]
+            additional_pos_embed: 额外位置编码，用于latent和proprio [2, dim]
         """
-        # 处理RGB特征
-        if len(src.shape) == 4:  # has H and W
-            bs, c, h, w = src.shape
-            src = src.flatten(2).permute(2, 0, 1)  # [h*w, bs, c]
-            pos_embed = pos_embed.flatten(2).permute(2, 0, 1).repeat(1, bs, 1)
-            
-            # 处理深度特征
-            if depth_src is not None:
-                # 确保深度特征的维度与RGB特征匹配
-                if len(depth_src.shape) == 4:
-                    if depth_src.shape != src.shape:
-                        # 如果维度不匹配，调整深度特征的维度
-                        depth_src = F.interpolate(depth_src, size=(h, w), mode='bilinear', align_corners=False)
-                    depth_src = depth_src.flatten(2).permute(2, 0, 1)  # [h*w, bs, c]
-                elif len(depth_src.shape) == 3:
-                    depth_src = depth_src.unsqueeze(1).repeat(1, bs, 1)  # [h*w, bs, c]
-                
-                if depth_pos_embed is not None:
-                    if len(depth_pos_embed.shape) == 4:
-                        if depth_pos_embed.shape != pos_embed.shape:
-                            depth_pos_embed = F.interpolate(depth_pos_embed, size=(h, w), mode='bilinear', align_corners=False)
-                        depth_pos_embed = depth_pos_embed.flatten(2).permute(2, 0, 1).repeat(1, bs, 1)
-                    elif len(depth_pos_embed.shape) == 3:
-                        depth_pos_embed = depth_pos_embed.unsqueeze(1).repeat(1, bs, 1)
-                else:
-                    depth_pos_embed = pos_embed  # 如果没有专门的深度位置编码，使用RGB的
-
-                # 合并RGB和深度特征
-                src = torch.cat([src, depth_src], dim=0)  # [2*h*w, bs, c]
-                pos_embed = torch.cat([pos_embed, depth_pos_embed], dim=0)  # [2*h*w, bs, c]
-
-            query_embed = query_embed.unsqueeze(1).repeat(1, bs, 1)
-            # mask = mask.flatten(1)
-
-            additional_pos_embed = additional_pos_embed.unsqueeze(1).repeat(1, bs, 1) # seq, bs, dim
-            pos_embed = torch.cat([additional_pos_embed, pos_embed], axis=0)
-
-            # 处理额外的输入特征（latent, proprio, pcl）
-            if pcl_input is not None:
-                # 添加点云特征到输入序列
-                addition_input = torch.stack([latent_input, proprio_input, pcl_input], axis=0)
-            else:
-                addition_input = torch.stack([latent_input, proprio_input], axis=0)
-     
-            # 将所有特征连接在一起
-            src = torch.cat([addition_input, src], axis=0)
-        else:
-            assert len(src.shape) == 3
-            # flatten NxHWxC to HWxNxC
-            bs, hw, c = src.shape
-            src = src.permute(1, 0, 2)
-            pos_embed = pos_embed.unsqueeze(1).repeat(1, bs, 1)
-            query_embed = query_embed.unsqueeze(1).repeat(1, bs, 1)
-
+        bs = src.shape[1]
+        
+        # 准备查询嵌入
+        query_embed = query_embed.unsqueeze(1).repeat(1, bs, 1)
+        
+        # 准备额外输入特征 [latent, proprio]
+        additional_features = torch.stack([latent_input, proprio_input], dim=0)  # [2, bs, dim]
+        
+        # 准备位置编码
+        additional_pos_embed = additional_pos_embed[:2].unsqueeze(1).repeat(1, bs, 1)  # [2, bs, dim]
+        
+        # 合并所有输入特征和位置编码
+        src = torch.cat([additional_features, src], dim=0)  # [2+seq_len, bs, dim]
+        pos_embed = torch.cat([additional_pos_embed, pos_embed], dim=0)  # [2+seq_len, bs, dim]
+        
         # 生成目标查询
         tgt = torch.zeros_like(query_embed)
         

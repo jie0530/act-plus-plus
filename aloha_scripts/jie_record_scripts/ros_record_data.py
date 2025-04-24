@@ -9,6 +9,9 @@ from record_finger_state_handle import ModbusClient
 import pyrealsense2 as rs
 import threading
 import queue
+# 添加模块所在目录到Python路径
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath('/home/wsco/jie_ws/src/act-plus-plus/aloha_scripts/jie_record_scripts'))))
+# 然后再导入
 from inference_d3roma import D3RoMa
 from utils_d3roma.camera import Realsense
 from sensor_msgs.msg import PointCloud2
@@ -35,7 +38,7 @@ class DataRecorder:
         # rospy.init_node('pointcloud_publisher', anonymous=True)
         self.pub_raw = rospy.Publisher('raw_pcl', PointCloud2, queue_size=10)
         self.pub_pred = rospy.Publisher('pred_pcl', PointCloud2, queue_size=10)
-        70
+
         # # 实例化 ModbusClient 1是左手，2是右手
         # self.modbus_client = ModbusClient(serial_port_name="/dev/ttyUSB0", slave_id=1)  # 替换为实际的串口名称
         # # 连接设备

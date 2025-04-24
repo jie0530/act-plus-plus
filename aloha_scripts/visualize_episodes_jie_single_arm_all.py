@@ -5,7 +5,7 @@ import h5py
 import argparse
 
 import matplotlib.pyplot as plt
-from jie_aloha_scripts.constants import DT
+from jie_record_scripts.record_constants import DT
 
 import IPython
 e = IPython.embed
@@ -154,7 +154,7 @@ def visualize_depth(depth_image):
 def main(args):
     dataset_dir = args['dataset_dir']
     task_name = args['task_name']
-    vis_data_dir = '/home/wsco/jie_ws/src/act-plus-plus/aloha_scripts/data/vis_data/' + task_name
+    vis_data_dir = '/home/wsco/jie_ws/datasets/vis_data/' + task_name
     if not os.path.exists(vis_data_dir):
         try:
             os.makedirs(vis_data_dir)

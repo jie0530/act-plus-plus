@@ -4,7 +4,7 @@ from pathlib import Path
 
 import numpy as np
 import torch
-from .models import build_ACT_model, build_CNNMLP_model
+from .models import build_ACT_model
 
 import IPython
 e = IPython.embed
@@ -55,11 +55,10 @@ def get_args_parser():
                         help="Train segmentation head if the flag is provided")
     
     # * Point Cloud
-    parser.add_argument('--use_pcd', action='store_true', help='not use point cloud')
-    parser.add_argument('--use_depth', action='store_true', help='not use depth')
     # repeat args in imitate_episodes just to avoid error. Will not be used
     parser.add_argument('--eval', action='store_true')
     parser.add_argument('--onscreen_render', action='store_true')
+    parser.add_argument('--pcl_type', action='store', type=str, help='pcl_type', required=True)
     parser.add_argument('--ckpt_dir', action='store', type=str, help='ckpt_dir', required=True)
     # parser.add_argument('--hand_ckpt_dir', action='store', type=str, help='hand_ckpt_dir', required=True)
     parser.add_argument('--policy_class', action='store', type=str, help='policy_class, capitalize', required=True)
@@ -71,8 +70,8 @@ def get_args_parser():
     parser.add_argument('--temporal_agg', action='store_true')
     
     parser.add_argument('--use_vq', action='store_true')
-    parser.add_argument('--vq_class', action='store', type=int, help='vq_class', required=False)
-    parser.add_argument('--vq_dim', action='store', type=int, help='vq_dim', required=False)
+    # parser.add_argument('--vq_class', action='store', type=int, help='vq_class', required=False)
+    # parser.add_argument('--vq_dim', action='store', type=int, help='vq_dim', required=False)
     parser.add_argument('--load_pretrain', action='store_true', default=False)
     parser.add_argument('--action_dim', action='store', type=int, required=False)
     parser.add_argument('--eval_every', action='store', type=int, default=500, help='eval_every', required=False)
@@ -97,29 +96,6 @@ def build_ACT_model_and_optimizer(args_override):
         setattr(args, k, v)
 
     model = build_ACT_model(args)
-    model.cuda()
-
-    param_dicts = [
-        {"params": [p for n, p in model.named_parameters() if "backbone" not in n and p.requires_grad]},
-        {
-            "params": [p for n, p in model.named_parameters() if "backbone" in n and p.requires_grad],
-            "lr": args.lr_backbone,
-        },
-    ]
-    optimizer = torch.optim.AdamW(param_dicts, lr=args.lr,
-                                  weight_decay=args.weight_decay)
-
-    return model, optimizer
-
-
-def build_CNNMLP_model_and_optimizer(args_override):
-    parser = argparse.ArgumentParser('DETR training and evaluation script', parents=[get_args_parser()])
-    args = parser.parse_args()
-
-    for k, v in args_override.items():
-        setattr(args, k, v)
-
-    model = build_CNNMLP_model(args)
     model.cuda()
 
     param_dicts = [
