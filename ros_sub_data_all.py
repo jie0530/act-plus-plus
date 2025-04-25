@@ -86,6 +86,7 @@ class DataRecorder:
         self.d3roma_high = D3RoMa(overrides, self.camera_config_high, variant="rgb+raw")
         
         # 修改相机工作线程
+        self.running = True  # 添加控制标志
         self.camera_threads = {}
         for cam_name in self.cameras:
             self.camera_threads[cam_name] = threading.Thread(
@@ -95,7 +96,7 @@ class DataRecorder:
             self.camera_threads[cam_name].start()
     
     def camera_worker(self, cam_name):
-        while True:
+        while self.running:  # 使用控制标志
             try:
                 # 获取特定相机的RGB-D图像
                 rgb_frame, depth_aligned = self.cameras[cam_name].get_rgbd_image()
@@ -129,9 +130,30 @@ class DataRecorder:
                 self.depth_aligned_frames[cam_name] = depth_aligned
             except Exception as e:
                 print(f"Error in camera worker for {cam_name}: {e}")
-                time.sleep(1)  # 出错时等待较长时间再重试
+                if self.running:  # 只有在正常运行时才等待重试
+                    time.sleep(1)
                 
-
+    def close(self):
+        """关闭所有相机线程和资源"""
+        print("正在关闭相机线程...")
+        self.running = False  # 设置标志以停止所有线程
+        
+        # 等待所有线程结束
+        for cam_name, thread in self.camera_threads.items():
+            print(f"等待 {cam_name} 线程结束...")
+            thread.join(timeout=5)  # 等待最多5秒
+            if thread.is_alive():
+                print(f"警告: {cam_name} 线程未能正常结束")
+        
+        # 关闭所有相机
+        for cam_name, camera in self.cameras.items():
+            print(f"关闭 {cam_name} 相机...")
+            try:
+                camera.pipeline.stop()
+            except Exception as e:
+                print(f"关闭 {cam_name} 时出错: {e}")
+        
+        print("所有相机已关闭")
 
     def _get_base_obs(self, include_joints=True, include_fingers=True, num_fingers=6, pcl_type='raw'):
         """基础观测函数，处理共同的逻辑

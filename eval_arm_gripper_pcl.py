@@ -172,20 +172,31 @@ def make_optimizer(policy_class, policy):
     return optimizer
 
 def get_pointcloud(obs):
-    # 检查是否存在点云数据
-    if 'pointcloud' not in obs:
-        return None
+    # 从观测中获取点云数据
+    xyz = obs['pointcloud']['xyz']  # list
+    rgb = obs['pointcloud']['rgb']  # list
     
-    # 将列表转换为numpy数组
-    xyz = np.array(obs['pointcloud']['xyz'], dtype=np.float32)
-    rgb = np.array(obs['pointcloud']['rgb'], dtype=np.float32)
+    # 先转换为numpy数组，再转换为PyTorch张量
+    xyz = np.array(xyz, dtype=np.float32)  # 转换列表为numpy数组
+    rgb = np.array(rgb, dtype=np.float32)  # 转换列表为numpy数组
     
-    # 创建点云数据字典
-    pointcloud_data = {
-        'xyz': torch.from_numpy(xyz).float().cuda(),
-        'rgb': torch.from_numpy(rgb).float().cuda()
+    # 转换为PyTorch张量
+    xyz = torch.from_numpy(xyz).float()  # 转换为PyTorch张量
+    rgb = torch.from_numpy(rgb).float()  # 转换为PyTorch张量
+    
+    # 添加batch维度
+    xyz = xyz.unsqueeze(0)  # [1, N, 3]
+    rgb = rgb.unsqueeze(0)  # [1, N, 3]
+    
+    # 如果需要，移动到GPU
+    if torch.cuda.is_available():
+        xyz = xyz.cuda()
+        rgb = rgb.cuda()
+    
+    return {
+        'xyz': xyz,
+        'rgb': rgb
     }
-    return pointcloud_data
 
 def eval_bc(config, ckpt_name, save_episode=True, num_rollouts=50):
     set_seed(1000)
@@ -321,10 +332,13 @@ def eval_bc(config, ckpt_name, save_episode=True, num_rollouts=50):
             inference_actions.append(action)
             
         # After the inference loop in eval_bc
-        dataset_path = '/home/wsco/jie_ws/src/act-plus-plus/aloha_scripts/data/'+ task_name + '/episode_0.hdf5'
+        dataset_path = '/home/wsco/jie_ws/datasets/'+ task_name + '/episode_0.hdf5'
         with h5py.File(dataset_path, 'r') as root:
             ground_truth_actions = root['/action'][:, :7]
         visualize_actions(inference_actions, ground_truth_actions, 7)
+        # 程序结束杀死所有线程\相机线程
+        sub_data.close()
+        rospy.signal_shutdown("Evaluation complete.")
 
 def visualize_actions(inference_actions, ground_truth_actions, rows_per_plot=3):
     # Convert lists to numpy arrays for easier plotting
